@@ -28,7 +28,7 @@ def get_Tongyi_response(template, content):
     ]
     try:
         response = dashscope.Generation.call(
-            api_key="sk-a48a1d84e015410292d07021f60b9acb",
+            api_key="",
             model="qwen-plus",
             messages=messages,
             result_format='message',
