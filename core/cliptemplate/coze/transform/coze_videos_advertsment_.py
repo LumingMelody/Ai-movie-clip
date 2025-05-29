@@ -1,6 +1,8 @@
 import os
 import random
 import uuid
+import warnings
+
 import requests
 import platform
 from typing import List, Union, Optional
@@ -11,7 +13,9 @@ from moviepy import (
     CompositeVideoClip, concatenate_videoclips,
     afx, vfx
 )
-from config import get_user_data_dir
+from moviepy.tools import close_all_clips
+
+from config import get_user_data_dir, create_font_path
 from core.clipgenerate.tongyi_get_online_url import get_online_url
 from core.clipgenerate.tongyi_get_videotalk import get_videotalk
 from core.cliptemplate.smart_clip_with_vocals import smart_clips
@@ -19,15 +23,9 @@ from core.cliptemplate.smart_clip_with_vocals import smart_clips
 # 支持的视频文件扩展名
 VIDEO_EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv')
 
+# 忽略 MoviePy 的资源清理警告
+warnings.filterwarnings("ignore", category=UserWarning, module="moviepy")
 
-def create_font_path() -> str:
-    """获取系统字体路径，确保字幕正常显示"""
-    if platform.system() == "Windows":
-        return "simhei.ttf"  # Windows默认黑体
-    elif platform.system() == "Darwin":  # macOS
-        return "/System/Library/Fonts/PingFang.ttc"
-    else:  # Linux等其他系统
-        return "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc"
 
 
 def download_file(url: str, filename: str, save_dir: str) -> str:
@@ -88,19 +86,16 @@ def resolve_materials(source: Union[str, List[str]], valid_extensions: tuple) ->
 
 
 def create_text_clip(text: str, duration: float, is_title: bool = False) -> TextClip:
-    """创建带样式的字幕片段"""
-    font = create_font_path()
+    font_name = create_font_path()
     return TextClip(
-        text,
-        font=font,
+        text=text,  # 传递文本内容
+        font=font_name,
         font_size=80 if is_title else 48,
         color="white",
         stroke_color="black",
         stroke_width=2,
         method="caption",
-        size=(1280, None),
-        align="center",
-        valign="bottom"
+        size=(1280, None)
     ).with_duration(duration)
 
 
@@ -129,7 +124,7 @@ def trans_videos_advertisement(
     base_materials_dir = os.path.join(user_data_dir, materials_root)
 
     # 系统默认素材目录
-    system_digital_host_folder = os.path.join(base_materials_dir, "digital_host")
+    system_digital_host_folder = os.path.join(base_materials_dir, "moderator")
     system_enterprise_folder = os.path.join(base_materials_dir, "enterprise")
 
     # 上传素材目录（固定为materials/upload）
@@ -260,15 +255,15 @@ def trans_videos_advertisement(
             if video_clip.duration > target_duration:
                 # 随机截取片段
                 start_time = random.uniform(0, video_clip.duration - target_duration - 0.1)
-                video_clip = video_clip.subclip(start_time, start_time + target_duration)
+                video_clip = video_clip.subclipped(start_time, start_time + target_duration)
             else:
                 # 循环播放直到匹配音频长度
                 loop_count = max(1, int(target_duration / video_clip.duration) + 1)
                 video_clip = video_clip.with_effects([vfx.Loop(duration=loop_count * video_clip.duration)])
-                video_clip = video_clip.subclip(0, target_duration)
+                video_clip = video_clip.subclipped(0, target_duration)
 
             # 绑定音频
-            video_clip = video_clip.set_audio(audio_clip)
+            video_clip = video_clip.with_audio(audio_clip)
             enterprise_clips.append(video_clip)
 
     # ---------------------- 视频组装 ----------------------
@@ -283,41 +278,41 @@ def trans_videos_advertisement(
                 composite = CompositeVideoClip([
                     current_bg,
                     start_clip.with_position(("center", "center")),
-                    create_text_clip(data["conpany_name"], audio_clip.duration, is_title=True).set_position(
+                    create_text_clip(data["conpany_name"], audio_clip.duration, is_title=True).with_position(
                         ("center", 0.2), relative=True),
-                    text_clip.set_position(("center", 0.8), relative=True)
-                ]).set_audio(audio_clip)
+                    text_clip.with_position(("center", 0.8), relative=True)
+                ]).with_audio(audio_clip)
 
             elif idx == len(data["output"]) - 1:  # 结尾片段
                 composite = CompositeVideoClip([
                     current_bg,
                     end_clip.with_position(("center", "center")),
-                    text_clip.set_position(("center", 0.8), relative=True)
-                ]).set_audio(audio_clip)
+                    text_clip.with_position(("center", 0.8), relative=True)
+                ]).with_audio(audio_clip)
 
             else:  # 中间企业片段
                 enterprise_idx = idx - 1
                 composite = CompositeVideoClip([
                     current_bg,
                     enterprise_clips[enterprise_idx].with_position(("center", "center")),
-                    text_clip.set_position(("center", 0.8), relative=True)
-                ]).set_audio(audio_clip)
+                    text_clip.with_position(("center", 0.8), relative=True)
+                ]).with_audio(audio_clip)
 
         else:
             if idx == 0:  # 无数字人时的标题片段
                 composite = CompositeVideoClip([
                     current_bg,
-                    create_text_clip(data["conpany_name"], audio_clip.duration, is_title=True).set_position(
+                    create_text_clip(data["conpany_name"], audio_clip.duration, is_title=True).with_position(
                         ("center", 0.5), relative=True),
-                    text_clip.set_position(("center", 0.8), relative=True)
-                ]).set_audio(audio_clip)
+                    text_clip.with_position(("center", 0.8), relative=True)
+                ]).with_audio(audio_clip)
 
             else:  # 普通企业片段
                 composite = CompositeVideoClip([
                     current_bg,
                     enterprise_clips[idx - 1].with_position(("center", "center")),
-                    text_clip.set_position(("center", 0.8), relative=True)
-                ]).set_audio(audio_clip)
+                    text_clip.with_position(("center", 0.8), relative=True)
+                ]).with_audio(audio_clip)
 
         video_clips.append(composite)
 
@@ -330,7 +325,7 @@ def trans_videos_advertisement(
         if bgm_clip.duration < final_video.duration:
             bgm_clip = bgm_clip.with_effects([afx.AudioLoop(duration=final_video.duration)])
         else:
-            bgm_clip = bgm_clip.subclip(0, final_video.duration)
+            bgm_clip = bgm_clip.subclipped(0, final_video.duration)
 
         # 混合音频（背景音量设为30%）
         try:
@@ -338,7 +333,7 @@ def trans_videos_advertisement(
                 final_video.audio,
                 bgm_clip.with_effects([afx.MultiplyVolume(0.3)])
             ])
-            final_video = final_video.set_audio(final_audio)
+            final_video = final_video.with_audio(final_audio)
         except Exception as e:
             print(f"音频混合失败: {e}")
             print("使用原始音频...")
@@ -354,14 +349,15 @@ def trans_videos_advertisement(
             fps=24,
             audio_codec="aac",
             threads=4,
-            verbose=False,
-            progress_bar=True
         )
         print(f"✅ 视频生成完成: {output_path}")
         return output_path
     except Exception as e:
         print(f"视频生成失败: {e}")
         raise
+    finally:
+        # 手动关闭所有剪辑资源
+        close_all_clips()
 
 if __name__ == '__main__':
 
@@ -397,16 +393,16 @@ if __name__ == '__main__':
         ]
     }
 
-    try:
-        output_path = trans_videos_advertisement(
-            data=json_data,
-            add_digital_host=True,  # 添加数字人
-            use_temp_materials=False,  # 使用临时素材目录
-            clip_mode=True,  # 使用随机剪辑模式
-            upload_digital_host=False,  # 使用上传目录的素材
-            moderator_source=None,  # 不指定其他路径，默认使用materials/upload目录
-            enterprise_source=None  # 不指定企业素材，默认使用materials/enterprise目录
-        )
-        print(f"视频生成成功，保存路径: {output_path}")
-    except Exception as e:
-        print(f"视频生成失败: {e}")
+    # try:
+    output_path = trans_videos_advertisement(
+        data=json_data,
+        add_digital_host=True,  # 添加数字人
+        use_temp_materials=False,  # 使用正式素材目录 (materials)
+        clip_mode=True,  # 使用随机剪辑模式
+        upload_digital_host=False,  # ✅ 使用系统默认目录（而非上传目录）
+        moderator_source=None,  # 不指定其他路径，使用默认系统目录
+        enterprise_source=None  # 使用默认企业素材目录
+    )
+    print(f"视频生成成功，保存路径: {output_path}")
+    # except Exception as e:
+    #     print(f"视频生成失败: {e}")

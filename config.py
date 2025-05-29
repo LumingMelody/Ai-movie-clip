@@ -56,6 +56,18 @@ def get_user_data_dir():
     os.makedirs(user_data_dir, exist_ok=True)
     return user_data_dir
 
+
+def create_font_path() -> str:
+    """获取项目根目录下的微软雅黑字体文件路径"""
+    # 获取当前脚本所在目录
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    font_path = os.path.join(script_dir, "微软雅黑.ttf")
+
+    # print(f"使用字体文件: {font_path}")
+    return font_path
+
 if __name__ == "__main__":
-    config = load_config()
-    print(config)
+    # config = load_config()
+    # print(config)
+    create_font_path()
