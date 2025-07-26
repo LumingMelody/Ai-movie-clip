@@ -19,6 +19,13 @@ import logging
 from datetime import datetime
 from typing import List, Dict, Any
 from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载环境变量
+env_path = Path(__file__).parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    print(f"✅ 已加载环境变量配置: {env_path}")
 
 from core.orchestrator.workflow_orchestrator import VideoEditingOrchestrator
 

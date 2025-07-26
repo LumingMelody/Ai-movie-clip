@@ -5,9 +5,18 @@ import time
 import asyncio
 import json
 import traceback
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
+
+# 加载环境变量
+env_path = Path(__file__).parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    print(f"✅ 已加载环境变量配置: {env_path}")
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.exceptions import RequestValidationError, HTTPException

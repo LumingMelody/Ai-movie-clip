@@ -178,7 +178,7 @@ def upload_to_aliyun_oss(local_file_path):
         # 从环境变量或配置文件读取
         access_key_id = os.environ.get('OSS_ACCESS_KEY_ID', 'YOUR_ACCESS_KEY_ID')
         access_key_secret = os.environ.get('OSS_ACCESS_KEY_SECRET', 'YOUR_ACCESS_KEY_SECRET')
-        endpoint = os.environ.get('OSS_ENDPOINT', 'https://oss-cn-hangzhou.aliyuncs.com')
+        endpoint = os.environ.get('OSS_ENDPOINT', 'https://oss-cn-hangzhou.aliyuncs.com').replace('https://', '')
         bucket_name = os.environ.get('OSS_BUCKET_NAME', 'lan8-e-business')
 
         print(f"📤 开始上传到OSS: {local_file_path}")
@@ -193,7 +193,9 @@ def upload_to_aliyun_oss(local_file_path):
 
         # 上传文件
         result = bucket.put_object_from_file(object_name, local_file_path)
+        url = f"https://{bucket_name}.{endpoint.replace('https://', '')}/{object_name}"
 
+        print(url)
         if result.status == 200:
             # 生成可访问的URL
             url = f"https://{bucket_name}.{endpoint.replace('https://', '')}/{object_name}"
