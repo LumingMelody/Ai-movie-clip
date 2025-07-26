@@ -13,7 +13,7 @@ import websockets
 from typing import Dict, Any
 
 # 设置 DashScope API Key
-dashscope.api_key = "sk-a48a1d84e015410292d07021f60b9acb"
+dashscope.api_key = os.getenv('DASHSCOPE_API_KEY', 'sk-a48a1d84e015410292d07021f60b9acb')
 
 # 配置文件路径
 CONFIG_DIR = "live_config/"
