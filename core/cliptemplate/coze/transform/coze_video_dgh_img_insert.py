@@ -1043,11 +1043,10 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
                                 size="1024*1024"
                             )
                             
-                            if result and result.get("task_status") == "SUCCEEDED":
-                                image_urls = result.get("results", [])
-                                if image_urls:
-                                    generated_pics.extend(image_urls)
-                                    print(f"✅ 生成第{i+1}张图片成功")
+                            if result:
+                                # get_text_to_image_v2 直接返回图片URL字符串
+                                generated_pics.append(result)
+                                print(f"✅ 生成第{i+1}张图片成功")
                             else:
                                 print(f"⚠️ 第{i+1}张图片生成失败")
                         except Exception as img_e:
