@@ -1,0 +1,5 @@
+# live_config.yaml
+cliplogs: cliplogs/
+clipmaterials: clipmaterials/
+clipoutputs: clipoutputs/
+clipprojects: clipprojects/

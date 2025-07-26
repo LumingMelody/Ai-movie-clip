@@ -1,0 +1,215 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.spec
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+*.m4v
+*.mpg
+*.mpeg
+*.3gp
+*.3g2
+
+# Audio
+*.mp3
+*.wav
+*.flac
+*.aac
+*.ogg
+*.wma
+*.m4a
+*.opus
+
+# Images
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.svg
+*.ico
+*.tiff
+*.tif
+*.webp
+
+# Models
+*.pt
+*.pth
+*.onnx
+*.pb
+*.h5
+*.ckpt
+*.safetensors
+
+# Data files
+*.json
+*.csv
+*.xlsx
+*.xls
+*.db
+*.sqlite
+*.pkl
+*.pickle
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+temp/
+tmp/
+cache/
+.cache/
+
+# Output directories
+output/
+outputs/
+results/
+
+# API keys and sensitive data
+api_key.txt
+key.yaml
+*.key
+*.pem
+.env
+.env.local
+.env.*.local
+
+# Fonts
+*.ttf
+*.otf
+*.woff
+*.woff2
+*.eot
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Documentation build
+docs/_build/
+site/
+
+# Test coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# pyenv
+.python-version
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+nosetests.xml
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+local_settings.py
+db.sqlite3
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Analysis results
+analysis.json
+analysis_result.json
+
+# Docker
+docker-compose.override.yml
+
+# Project specific
+ikun/
+data/
+live_config/
