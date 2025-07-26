@@ -183,4 +183,3 @@ A: 使用GPU加速，或调整 `config.yaml` 中的并发设置。
 
 - 感谢阿里云DashScope提供的AI能力
 - 感谢OpenAI提供的语言模型
-- 感谢所有贡献者的支持
