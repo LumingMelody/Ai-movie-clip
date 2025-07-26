@@ -30,30 +30,17 @@ except ImportError:
         return None
 
 # ============ 配置信息 ============
-# 从配置文件导入，避免硬编码密钥
-try:
-    from config.oss_config import (
-        OSS_ACCESS_KEY_ID as ACCESS_KEY_ID,
-        OSS_ACCESS_KEY_SECRET as ACCESS_SECRET,
-        OSS_ENDPOINT,
-        OSS_BUCKET_NAME as BUCKET_NAME,
-        VIDEO_OSS_FOLDER,
-        ADS_OSS_FOLDER,
-        OUTPUT_OSS_FOLDER
-    )
-except ImportError:
-    # 兼容旧的配置方式
-    print("⚠️ 警告：无法导入 OSS 配置，请检查 config/oss_config.py")
-    ACCESS_KEY_ID = 'YOUR_ACCESS_KEY_ID'
-    ACCESS_SECRET = 'YOUR_ACCESS_SECRET'
-    OSS_ENDPOINT = 'oss-cn-hangzhou.aliyuncs.com'
-    BUCKET_NAME = 'lan8-e-business'
-    VIDEO_OSS_FOLDER = 'agent/resource/video/'
-    ADS_OSS_FOLDER = 'ads/'
-    OUTPUT_OSS_FOLDER = 'agent/resource'
+# 从环境变量读取配置
+ACCESS_KEY_ID = os.getenv('OSS_ACCESS_KEY_ID', 'YOUR_ACCESS_KEY_ID')
+ACCESS_SECRET = os.getenv('OSS_ACCESS_KEY_SECRET', 'YOUR_ACCESS_SECRET')
+OSS_ENDPOINT = os.getenv('OSS_ENDPOINT', 'https://oss-cn-hangzhou.aliyuncs.com').replace('https://', '')
+BUCKET_NAME = os.getenv('OSS_BUCKET_NAME', 'lan8-e-business')
+VIDEO_OSS_FOLDER = 'agent/resource/video/'
+ADS_OSS_FOLDER = 'ads/'
+OUTPUT_OSS_FOLDER = 'agent/resource'
 
 # 百炼平台配置
-dashscope.api_key = "sk-a48a1d84e015410292d07021f60b9acb"
+dashscope.api_key = os.getenv('DASHSCOPE_API_KEY', 'sk-a48a1d84e015410292d07021f60b9acb')
 
 # ============ 本地临时目录 ============
 LOCAL_DIR = './temp/'
