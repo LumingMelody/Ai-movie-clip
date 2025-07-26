@@ -1,0 +1,15 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ai_video_app
+    volumes:
+      - .:/app
+      - "./ikun/ikun:/app/data"  # 直接挂载宿主机目录
+    ports:
+      - "30003:8100"
+    environment:
+      - IKUN_DATA_DIR=/app/data  # 告诉程序使用容器内的挂载路径
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Shanghai
