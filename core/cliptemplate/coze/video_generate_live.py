@@ -564,12 +564,30 @@ def find_digital_human_output(digital_human_result):
         return None
 
     print(f"🔍 查找数字人输出文件...")
+    print(f"📝 数字人函数返回结果: {digital_human_result}")
 
     # 可能的路径列表
     possible_paths = []
 
     # 如果返回的是字符串路径
     if isinstance(digital_human_result, str):
+        # 🔥 优先处理相对路径，这是数字人函数返回的warehouse路径格式
+        if digital_human_result.startswith('projects/') and not os.path.isabs(digital_human_result):
+            # 这是warehouse格式的相对路径，如 "projects/96772e73-6b92-11f0-98c3-44fa66e560cc/output.mp4"
+            try:
+                # 使用live_config获取用户数据目录
+                import live_config
+                user_data_dir = live_config.get_user_data_dir()
+                absolute_path = os.path.join(user_data_dir, digital_human_result.replace('/', os.path.sep))
+                possible_paths.append(absolute_path)
+                print(f"🎯 使用warehouse路径: {absolute_path}")
+            except ImportError:
+                # 如果没有live_config，尝试./ikun/目录
+                absolute_path = os.path.join("./ikun/", digital_human_result.replace('/', os.path.sep))
+                possible_paths.append(absolute_path)
+                print(f"🎯 使用ikun路径: {absolute_path}")
+        
+        # 添加其他可能的路径
         possible_paths.extend([
             digital_human_result,  # 直接路径
             os.path.abspath(digital_human_result),  # 绝对路径
@@ -595,37 +613,48 @@ def find_digital_human_output(digital_human_result):
     except:
         pass
 
-    # 查找数字人输出目录中的最新文件
-    try:
-        ikun_dir = "./ikun"
-        if os.path.exists(ikun_dir):
-            # 查找projects目录下的最新项目
-            projects_dir = os.path.join(ikun_dir, "projects")
-            if os.path.exists(projects_dir):
-                project_dirs = [d for d in os.listdir(projects_dir)
-                                if os.path.isdir(os.path.join(projects_dir, d))]
-
-                if project_dirs:
-                    # 按修改时间排序，获取最新的项目目录
-                    project_dirs.sort(key=lambda x: os.path.getmtime(os.path.join(projects_dir, x)), reverse=True)
-                    latest_project = project_dirs[0]
-                    latest_project_path = os.path.join(projects_dir, latest_project)
-
-                    # 查找output.mp4文件
-                    output_file = os.path.join(latest_project_path, "output.mp4")
-                    possible_paths.append(output_file)
-
-                    print(f"🔍 检查最新项目目录: {latest_project_path}")
-    except Exception as e:
-        print(f"⚠️ 查找项目目录失败: {e}")
-
-    # 逐一检查路径
+    # 🔥 只有在上述路径都找不到的情况下，才使用"最新项目目录"的备用方案
+    # 这避免了项目间文件混合的问题
+    use_latest_fallback = True
+    
+    # 先检查明确指定的路径
     for path in possible_paths:
         print(f"🔍 检查路径: {path}")
         if os.path.exists(path):
             file_size = os.path.getsize(path)
             print(f"✅ 找到数字人视频: {path} ({format_size(file_size)})")
+            use_latest_fallback = False
             return path
+
+    # 🔥 备用方案：只有在找不到指定路径时才使用"最新项目目录"
+    if use_latest_fallback:
+        print(f"⚠️ 指定路径未找到，使用备用方案查找最新项目目录...")
+        try:
+            ikun_dir = "./ikun"
+            if os.path.exists(ikun_dir):
+                # 查找projects目录下的最新项目
+                projects_dir = os.path.join(ikun_dir, "projects")
+                if os.path.exists(projects_dir):
+                    project_dirs = [d for d in os.listdir(projects_dir)
+                                    if os.path.isdir(os.path.join(projects_dir, d))]
+
+                    if project_dirs:
+                        # 按修改时间排序，获取最新的项目目录
+                        project_dirs.sort(key=lambda x: os.path.getmtime(os.path.join(projects_dir, x)), reverse=True)
+                        latest_project = project_dirs[0]
+                        latest_project_path = os.path.join(projects_dir, latest_project)
+
+                        # 查找output.mp4文件
+                        output_file = os.path.join(latest_project_path, "output.mp4")
+                        possible_paths.append(output_file)
+
+                        print(f"🔍 备用方案检查最新项目目录: {latest_project_path}")
+                        if os.path.exists(output_file):
+                            file_size = os.path.getsize(output_file)
+                            print(f"✅ 备用方案找到数字人视频: {output_file} ({format_size(file_size)})")
+                            return output_file
+        except Exception as e:
+            print(f"⚠️ 备用方案查找项目目录失败: {e}")
 
     print(f"❌ 未找到数字人视频文件")
     print(f"📋 尝试的路径:")
