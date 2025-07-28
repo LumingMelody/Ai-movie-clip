@@ -375,3 +375,17 @@ class SmartClipRequest(BaseModel):
     tenant_id: Optional[str] = Field(None, description="租户ID")  # 🔥 新增
     task_id: Optional[str] = Field(None, description="任务ID")  # 🔥 新增
     id: Optional[str] = Field(None, description="业务ID")  # 🔥 新增
+
+
+class VideoHighlightsRequest(BaseModel):
+    """直播视频精彩片段提取请求"""
+    excel_url: str = Field(..., description="Excel文件URL")
+    video_url: str = Field(..., description="视频文件URL")
+    metrics: Optional[List[str]] = Field(
+        default=['实时在线人数', '互动率', '关注率', '商品点击率'],
+        description="要分析的指标列表"
+    )
+    top_n: Optional[int] = Field(default=3, description="每个指标提取Top N的时间点")
+    upload_to_oss: Optional[bool] = Field(default=True, description="是否上传到OSS")
+    tenant_id: Optional[str] = Field(None, description="租户ID")
+    id: Optional[str] = Field(None, description="业务ID")

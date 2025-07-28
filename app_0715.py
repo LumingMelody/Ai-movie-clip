@@ -40,7 +40,8 @@ from core.clipgenerate.interface_model import (
     VideoRandomRequest, ProductConfigRequest, VoiceConfigRequest,
     ServerStartRequest, ServerStopRequest, AutoIntroStartRequest, AutoIntroStopRequest,
     TextIndustryRequest, CopyGenerationRequest, CoverAnalysisRequest,
-    VideoEditMainRequest, AIAvatarUnifiedRequest, TimelineGenerationRequest, TimelineModifyRequest
+    VideoEditMainRequest, AIAvatarUnifiedRequest, TimelineGenerationRequest, TimelineModifyRequest,
+    VideoHighlightsRequest
 )
 from core.clipgenerate.tongyi_wangxiang_model import (
     TextToImageV2Request, TextToImageV1Request, ImageBackgroundEditRequest,
@@ -95,6 +96,7 @@ from core.cliptemplate.coze.videos_clothes_fast_change import get_videos_clothes
 from core.cliptemplate.coze.text_industry import get_text_industry
 from core.orchestrator.workflow_orchestrator import VideoEditingOrchestrator
 from core.text_generate.generator import get_copy_generation, CopyGenerator
+from core.cliptemplate.coze.t15 import extract_video_highlights_from_url
 
 from core.cliptemplate.coze.refactored_api import UnifiedVideoAPI
 
@@ -1314,7 +1316,10 @@ async def video_clicktype(request: ClickTypeRequest):
             error_res = {"error": str(e), "function_name": "generate_clicktype"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "generate_clicktype", mode=mode)
+    # 🔥 修复：显式传递参数，避免参数过滤问题
+    return await handle_async_endpoint(request, process, "generate_clicktype", 
+                                       title=request.title, 
+                                       content=request.content)
 
 
 @app.post("/video/digital-human-easy")
@@ -1483,21 +1488,43 @@ async def video_stickman(request: StickmanRequest):
     """生成火柴人视频"""
     mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
 
-    # 定义实际处理逻辑
-    async def process():
+    if mode == "sync":
+        # 同步模式
         try:
-            result = service.video_api.generate_stickman(
-                story=request.story,
-                animation_style=getattr(request, 'animation_style', 'simple'),
-                speed=getattr(request, 'speed', 'normal')
+            # 使用原始的 get_video_stickman 函数，它接收 author, title, content, lift_text 参数
+            from core.cliptemplate.coze.video_stickman import get_video_stickman
+            result = get_video_stickman(
+                author=request.author,
+                title=request.title,
+                content=getattr(request, 'content', None),
+                lift_text=getattr(request, 'lift_text', '科普动画')
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "generate_stickman", request, is_digital_human=False)
         except Exception as e:
             error_res = {"error": str(e), "function_name": "generate_stickman"}
             return format_response(error_res, mode="sync", error_type="general_exception")
-
-    return await handle_async_endpoint(request, process, "generate_stickman", mode=mode)
+    else:
+        # 异步模式
+        try:
+            args = {
+                "author": request.author,
+                "title": request.title,
+                "content": getattr(request, 'content', None),
+                "lift_text": getattr(request, 'lift_text', '科普动画')
+            }
+            
+            task_id = await task_manager.submit_task(
+                func_name="get_video_stickman",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_stickman"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
 
 
 @app.post("/video/smart-clip")
@@ -1809,6 +1836,84 @@ async def video_edit(request: VideoEditMainRequest):
         except Exception as e:
             error_res = {"error": str(e), "function_name": "get_video_edit_simple"}
             return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+@app.post("/video/highlights-extract")
+async def video_highlights_extract(request: VideoHighlightsRequest):
+    """从直播数据中提取视频精彩片段"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+    
+    if mode == "sync":
+        # 同步模式
+        try:
+            result = extract_video_highlights_from_url(
+                excel_url=request.excel_url,
+                video_url=request.video_url,
+                metrics=request.metrics,
+                top_n=request.top_n,
+                upload_to_oss_flag=request.upload_to_oss
+            )
+            
+            # 根据结果状态返回不同的响应
+            if result.get("status") == "success":
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "code": 200,
+                        "message": result.get("message", "视频处理成功"),
+                        "data": {
+                            "video_url": result.get("oss_url", result.get("output_file")),
+                            "output_file": result.get("output_file")
+                        }
+                    }
+                )
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "code": 500,
+                        "message": result.get("message", "视频处理失败"),
+                        "error": result.get("message")
+                    }
+                )
+                
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "code": 500,
+                    "message": f"处理失败: {str(e)}",
+                    "error": str(e)
+                }
+            )
+    else:
+        # 异步模式
+        try:
+            args = {
+                "excel_url": request.excel_url,
+                "video_url": request.video_url,
+                "metrics": request.metrics,
+                "top_n": request.top_n,
+                "upload_to_oss_flag": request.upload_to_oss
+            }
+            
+            task_id = await task_manager.submit_task(
+                func_name="extract_video_highlights_from_url",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "code": 500,
+                    "message": f"提交任务失败: {str(e)}",
+                    "error": str(e)
+                }
+            )
 
 
 # ========== Tongyi Wanxiang 文生图接口 ==========

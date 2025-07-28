@@ -743,6 +743,12 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
 
     local_video_path = None
     temp_file_path = None
+    
+    # 初始化变量，避免作用域问题
+    new_audio_clip = None
+    base_video = None
+    final_video = None
+    new_audio_path = None
 
     try:
         # 处理视频文件
@@ -914,10 +920,10 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
         if audio_strategy == "keep_original_audio":
             print(f"🔊 保留原始视频音频")
             # 不做任何音频操作，保持原有音频
-        elif new_audio_path:
+        elif new_audio_path and os.path.exists(new_audio_path):
             print(f"🔊 移除原始音频，使用新音频: {new_audio_path}")
             base_video = safe_without_audio(base_video)
-            if 'new_audio_clip' not in locals():
+            if not new_audio_clip:
                 new_audio_clip = AudioFileClip(new_audio_path)
             base_video = safe_set_audio(base_video, new_audio_clip)
         else:
@@ -944,21 +950,32 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
                     if os.path.exists(dh_full_path):
                         print(f"✅ 数字人视频生成成功，使用数字人视频")
 
-                        # 关闭当前base_video
-                        base_video.close()
-                        new_audio_clip.close()
+                        try:
+                            # 先尝试加载数字人视频
+                            dh_video = VideoFileClip(dh_full_path)
+                            
+                            # 只有加载成功后才关闭原视频
+                            base_video.close()
+                            if new_audio_clip:
+                                new_audio_clip.close()
+                                new_audio_clip = None  # 清空引用
+                            
+                            # 使用数字人视频替换base_video
+                            base_video = dh_video
 
-                        # 加载数字人视频
-                        base_video = VideoFileClip(dh_full_path)
+                            # 确保数字人视频时长正确
+                            if abs(base_video.duration - target_duration) > 0.1:  # 允许0.1秒误差
+                                print(f"🔧 调整数字人视频时长: {base_video.duration:.2f}s -> {target_duration:.2f}s")
+                                base_video = base_video.subclipped(0, target_duration)
 
-                        # 确保数字人视频时长正确
-                        if abs(base_video.duration - target_duration) > 0.1:  # 允许0.1秒误差
-                            print(f"🔧 调整数字人视频时长: {base_video.duration:.2f}s -> {target_duration:.2f}s")
-                            base_video = base_video.subclipped(0, target_duration)
-
-                        # 确保使用克隆的音频
-                        new_audio_clip = AudioFileClip(new_audio_path)
-                        base_video = safe_set_audio(base_video, new_audio_clip)
+                            # 重新加载音频，确保使用克隆的音频
+                            if new_audio_path and os.path.exists(new_audio_path):
+                                new_audio_clip = AudioFileClip(new_audio_path)
+                                base_video = safe_set_audio(base_video, new_audio_clip)
+                            
+                        except Exception as e:
+                            print(f"⚠️ 加载数字人视频失败: {str(e)}，继续使用原视频")
+                            # 如果加载失败，base_video保持不变
 
                     else:
                         print(f"⚠️ 数字人视频文件不存在: {dh_full_path}")
@@ -972,6 +989,10 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
 
         # 设置最终视频时长（已在上面根据策略设置）
         # video_duration 已在音频策略处理中设置
+
+        # 🔥 确保base_video有效
+        if not base_video:
+            raise ValueError("基础视频处理失败，base_video为空")
 
         # 🔥 关键步骤7：处理字幕
         clips_to_compose = [base_video]
@@ -1079,7 +1100,17 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
 
         # 🔥 关键步骤9：合成最终视频
         print(f"🎬 合成最终视频...")
-        final_video = CompositeVideoClip(clips_to_compose)
+        
+        # 检查clips_to_compose中是否有None值
+        valid_clips = [clip for clip in clips_to_compose if clip is not None]
+        if not valid_clips:
+            raise ValueError("没有有效的视频片段可以合成")
+        
+        # 检查base_video是否存在且有效
+        if not base_video or base_video.duration <= 0:
+            raise ValueError("基础视频无效或已被释放")
+        
+        final_video = CompositeVideoClip(valid_clips)
         final_video = safe_set_duration(final_video, video_duration)
 
         # 输出视频
@@ -1107,21 +1138,24 @@ def trans_dgh_img_insert(data: dict, filepath, custom_headers=None, audio_strate
         finally:
             # 🔥 重要：手动释放MoviePy资源，防止文件占用
             try:
-                final_video.close()
-                print("🔧 已释放final_video资源")
+                if 'final_video' in locals() and final_video is not None:
+                    final_video.close()
+                    print("🔧 已释放final_video资源")
             except:
                 pass
 
             try:
-                base_video.close()
-                print("🔧 已释放base_video资源")
+                if 'base_video' in locals() and base_video is not None:
+                    base_video.close()
+                    print("🔧 已释放base_video资源")
             except:
                 pass
 
             # 释放音频资源
             try:
-                new_audio_clip.close()
-                print("🔧 已释放audio_clip资源")
+                if 'new_audio_clip' in locals() and new_audio_clip is not None:
+                    new_audio_clip.close()
+                    print("🔧 已释放audio_clip资源")
             except:
                 pass
 

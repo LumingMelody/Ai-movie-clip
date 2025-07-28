@@ -279,6 +279,81 @@ def get_video_dgh_img_insert(title: str, video_file_path: str,
     logger.info(f"🎬 开始处理视频: title='{title}', path='{video_file_path}'")
     print(f"🎬 开始处理视频: title='{title}'")
     print(f"🎵 audio_url={audio_url}")
+    print(f"🔄 need_change={need_change}")
+    
+    # 🔥 处理内容改写逻辑
+    final_content = content if content else title
+    if need_change and content:
+        print(f"🤖 开始AI改写内容...")
+        try:
+            # 直接调用qwen-max API进行改写
+            from get_api_key import get_api_key_from_file
+            
+            api_key = get_api_key_from_file()
+            
+            # 构建改写提示
+            rewrite_prompt = f"""
+请你作为一个专业的内容创作者，对以下内容进行改写优化：
+
+原内容：{content}
+
+改写要求：
+1. 保持原意不变，但让语言更加生动有趣
+2. 增加一些吸引力和感染力
+3. 保持内容的专业性和准确性
+4. 长度与原文相当
+5. 适合做视频配音文本
+
+请直接返回改写后的内容，不要添加其他说明。
+"""
+            
+            # 调用阿里云百炼API
+            url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            data = {
+                "model": "qwen-max",
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": rewrite_prompt
+                        }
+                    ]
+                },
+                "parameters": {
+                    "temperature": 0.8,
+                    "top_p": 0.9,
+                    "max_tokens": 2000
+                }
+            }
+            
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get("output") and result["output"].get("text"):
+                    rewritten_content = result["output"]["text"]
+                    if rewritten_content.strip():
+                        final_content = rewritten_content.strip()
+                        print(f"✅ 内容改写完成")
+                        print(f"🔤 原内容长度: {len(content)} 字符")
+                        print(f"🔤 改写后长度: {len(final_content)} 字符")
+                    else:
+                        print(f"⚠️ AI改写返回空内容，使用原内容")
+                else:
+                    print(f"⚠️ AI响应格式异常，使用原内容")
+            else:
+                print(f"❌ AI API调用失败 (状态码: {response.status_code})，使用原内容")
+                
+        except Exception as e:
+            print(f"❌ AI改写失败，使用原内容: {str(e)}")
+            logger.warning(f"AI改写失败: {str(e)}")
+    elif need_change:
+        print(f"⚠️ need_change=True 但 content 为空，跳过改写")
     
     # 🔥 简化的音频处理策略
     if audio_url:
@@ -293,8 +368,8 @@ def get_video_dgh_img_insert(title: str, video_file_path: str,
         # 使用提供的音频URL作为声音克隆参考
         print(f"🎵 使用提供的音频URL作为声音克隆参考")
         response = {
-            'text': [content] if content else [title],
-            'audio_text': content if content else title,  # 🔥 关键：语音合成的文本
+            'text': [final_content],
+            'audio_text': final_content,  # 🔥 关键：语音合成的文本
             'title': title,
             'voice_reference_url': audio_url  # 🔥 标记为声音克隆参考
         }
@@ -302,7 +377,7 @@ def get_video_dgh_img_insert(title: str, video_file_path: str,
         # 保留原视频音频，不需要调用工作流
         print(f"🎵 保留原视频音频，跳过语音合成")
         response = {
-            'text': [content] if content else [title],  # 用content或title作为字幕文本
+            'text': [final_content],  # 🔥 使用处理后的内容作为字幕文本
             'title': title,
             'keep_original_audio': True  # 标记保留原音频
         }
