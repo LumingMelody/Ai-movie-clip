@@ -11,40 +11,56 @@ from moviepy import VideoFileClip, AudioFileClip, CompositeVideoClip, ImageClip,
 import oss2
 import nls  # 新的阿里云智能语音交互SDK
 import requests
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
 
 # ============ 配置信息 ============
-ACCESS_KEY_ID = 'your-access-key-id'
-ACCESS_SECRET = 'your-access-secret'
-OSS_ENDPOINT = 'oss-cn-beijing.aliyuncs.com'
-BUCKET_NAME = 'your-bucket-name'
-VIDEO_OSS_PATH = 'videos/original.mp4'  # 原始视频路径
-ADS_OSS_FOLDER = 'ads/'  # 广告图片目录
-OUTPUT_OSS_FOLDER = 'outputs/'  # 输出目录
+# 从环境变量获取配置，如果没有则使用默认值
+ACCESS_KEY_ID = os.getenv('OSS_ACCESS_KEY_ID', 'your-access-key-id')
+ACCESS_SECRET = os.getenv('OSS_ACCESS_KEY_SECRET', 'your-access-secret')
+OSS_ENDPOINT = os.getenv('OSS_ENDPOINT', 'oss-cn-beijing.aliyuncs.com')
+BUCKET_NAME = os.getenv('OSS_BUCKET_NAME', 'your-bucket-name')
+VIDEO_OSS_PATH = os.getenv('VIDEO_OSS_PATH', 'videos/original.mp4')  # 原始视频路径
+ADS_OSS_FOLDER = os.getenv('ADS_OSS_FOLDER', 'ads/')  # 广告图片目录
+OUTPUT_OSS_FOLDER = os.getenv('OUTPUT_OSS_FOLDER', 'outputs/')  # 输出目录
 
 # 智能语音交互配置
-NLS_URL = "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1"
-TOKEN = "your-token"  # 需要通过阿里云获取Token
-APPKEY = "your-appkey"  # 从智能语音交互控制台获取
+NLS_URL = os.getenv('NLS_URL', 'wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1')
+TOKEN = os.getenv('NLS_TOKEN', 'your-token')  # 需要通过阿里云获取Token
+APPKEY = os.getenv('NLS_APPKEY', 'your-appkey')  # 从智能语音交互控制台获取
 
 # ============ 本地临时目录 ============
-LOCAL_DIR = './temp/'
+LOCAL_DIR = os.getenv('TEMP_DIR', './temp/')
 os.makedirs(LOCAL_DIR, exist_ok=True)
 
 # ============ 初始化 OSS ============
-auth = oss2.Auth(ACCESS_KEY_ID, ACCESS_SECRET)
-bucket = oss2.Bucket(auth, OSS_ENDPOINT, BUCKET_NAME)
+# 只有在配置有效时才初始化
+if ACCESS_KEY_ID != 'your-access-key-id' and ACCESS_SECRET != 'your-access-secret':
+    auth = oss2.Auth(ACCESS_KEY_ID, ACCESS_SECRET)
+    bucket = oss2.Bucket(auth, OSS_ENDPOINT, BUCKET_NAME)
+else:
+    bucket = None
+    print("⚠️ OSS配置未设置，部分功能可能无法使用")
 
 
 # ============ 工具函数 ============
 
 def download_from_oss(oss_path, local_path):
-    bucket.download_file(oss_path, local_path)
-    print(f"Downloaded {oss_path} to {local_path}")
+    if bucket:
+        bucket.download_file(oss_path, local_path)
+        print(f"Downloaded {oss_path} to {local_path}")
+    else:
+        raise ValueError("OSS未配置，无法下载文件")
 
 
 def upload_to_oss(local_path, oss_path):
-    bucket.upload_file(oss_path, local_path)
-    print(f"Uploaded {local_path} to {oss_path}")
+    if bucket:
+        bucket.upload_file(oss_path, local_path)
+        print(f"Uploaded {local_path} to {oss_path}")
+    else:
+        raise ValueError("OSS未配置，无法上传文件")
 
 
 def get_video_duration(video_path):
