@@ -377,6 +377,18 @@ class SmartClipRequest(BaseModel):
     id: Optional[str] = Field(None, description="业务ID")  # 🔥 新增
 
 
+class VideoHighlightClipRequest(BaseModel):
+    """基于观看数据的视频高光剪辑请求"""
+    video_source: str = Field(..., description="视频文件路径或URL")
+    excel_source: str = Field(..., description="Excel文件路径或URL，包含观看数据")
+    target_duration: int = Field(30, description="目标视频时长（秒）")
+    output_path: Optional[str] = Field(None, description="输出文件路径")
+    tenant_id: Optional[str] = Field(None, description="租户ID")
+    task_id: Optional[str] = Field(None, description="任务ID")
+    id: Optional[str] = Field(None, description="业务ID")
+    mode: Optional[str] = Field("sync", description="执行模式：sync(同步) 或 async(异步)")
+
+
 class VideoHighlightsRequest(BaseModel):
     """直播视频精彩片段提取请求"""
     excel_url: str = Field(..., description="Excel文件URL")

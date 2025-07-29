@@ -32,6 +32,7 @@ import config
 
 from core.clipgenerate.interface_function import get_smart_clip_video, download_file_from_url, upload_to_oss, \
     OSS_BUCKET_NAME, OSS_ENDPOINT, get_file_info, get_video_edit_simple
+from video_highlight_clip import process_video_highlight_clip
 from core.clipgenerate.interface_model import (
     VideoAdvertisementRequest, VideoAdvertisementEnhanceRequest, ClickTypeRequest,
     DigitalHumanRequest, DigitalHumanEasyRequest, ClothesDifferentSceneRequest, BigWordRequest, CatMemeRequest,
@@ -41,7 +42,7 @@ from core.clipgenerate.interface_model import (
     ServerStartRequest, ServerStopRequest, AutoIntroStartRequest, AutoIntroStopRequest,
     TextIndustryRequest, CopyGenerationRequest, CoverAnalysisRequest,
     VideoEditMainRequest, AIAvatarUnifiedRequest, TimelineGenerationRequest, TimelineModifyRequest,
-    VideoHighlightsRequest
+    VideoHighlightsRequest, VideoHighlightClipRequest
 )
 from core.clipgenerate.tongyi_wangxiang_model import (
     TextToImageV2Request, TextToImageV1Request, ImageBackgroundEditRequest,
@@ -605,6 +606,9 @@ class AsyncTaskManager:
         self.api_service = api_service
         # 🔥 新增：跟踪已更新状态的任务，避免重复更新
         self.status_updated_tasks = set()
+        # 🔥 新增：启动超时检查线程
+        self.timeout_checker_thread = threading.Thread(target=self._check_timeouts, daemon=True)
+        self.timeout_checker_thread.start()
         print(f"🚀 异步任务管理器初始化: max_workers={max_workers}, timeout={max_task_timeout}s")
 
     async def submit_task(self, func_name: str, args: dict, task_id: str = None, tenant_id=None,
@@ -752,8 +756,23 @@ class AsyncTaskManager:
         # 1. 执行原有任务
         result = self._execute_task_with_timeout(task_id, func_name, args)
 
-        # 2. 处理上传逻辑（这里简化处理）
-        if result["status"] == "completed" and tenant_id:
+        # 2. 处理结果
+        if result["status"] == "failed" and tenant_id:
+            # 任务失败时，更新状态为失败
+            try:
+                print(f"❌ [OSS-UPLOAD] 任务执行失败，更新状态为失败")
+                self.api_service.update_task_status(
+                    task_id=task_id,
+                    status="2",  # 失败状态
+                    tenant_id=tenant_id,
+                    business_id=business_id,
+                    path="",
+                    resource_id=None
+                )
+                print(f"✅ [OSS-UPLOAD] 失败状态更新成功")
+            except Exception as e:
+                print(f"❌ [OSS-UPLOAD] 更新失败状态时出错: {str(e)}")
+        elif result["status"] == "completed" and tenant_id:
             try:
                 print(f"☁️ [OSS-UPLOAD] 处理结果并更新状态")
 
@@ -888,6 +907,64 @@ class AsyncTaskManager:
         """获取所有任务结果"""
         with self.result_condition:
             return self.results.copy()
+    
+    def _check_timeouts(self):
+        """定期检查超时任务的线程"""
+        while True:
+            try:
+                time.sleep(30)  # 每30秒检查一次
+                current_time = time.time()
+                
+                with self.result_condition:
+                    for task_id, result in self.results.items():
+                        # 只检查处理中的任务
+                        if result.get('status') in ['processing', 'uploading']:
+                            started_at = result.get('started_at', 0)
+                            if started_at > 0:
+                                elapsed_time = current_time - started_at
+                                
+                                # 如果超过最大超时时间
+                                if elapsed_time > self.max_task_timeout:
+                                    print(f"⏰ [TIMEOUT] 任务 {task_id} 超时 ({elapsed_time:.1f}s > {self.max_task_timeout}s)")
+                                    
+                                    # 更新本地状态为失败
+                                    result.update({
+                                        'status': 'failed',
+                                        'error': f'任务超时 ({self.max_task_timeout}秒)',
+                                        'failed_at': current_time,
+                                        'timeout': True
+                                    })
+                                    
+                                    # 如果有tenant_id，更新远程状态
+                                    tenant_id = result.get('tenant_id')
+                                    business_id = result.get('business_id')
+                                    if tenant_id and task_id not in self.status_updated_tasks:
+                                        try:
+                                            self.api_service.update_task_status(
+                                                task_id=task_id,
+                                                status="2",  # 失败状态
+                                                tenant_id=tenant_id,
+                                                business_id=business_id,
+                                                path="",
+                                                resource_id=None
+                                            )
+                                            self.status_updated_tasks.add(task_id)
+                                            print(f"✅ [TIMEOUT] 已更新任务 {task_id} 状态为失败")
+                                        except Exception as e:
+                                            print(f"❌ [TIMEOUT] 更新任务状态失败: {str(e)}")
+                                    
+                                    # 取消对应的future
+                                    if task_id in self.active_futures:
+                                        future = self.active_futures[task_id]
+                                        if not future.done():
+                                            future.cancel()
+                                        del self.active_futures[task_id]
+                    
+                    self.result_condition.notify_all()
+                    
+            except Exception as e:
+                print(f"❌ [TIMEOUT-CHECK] 超时检查异常: {str(e)}")
+                time.sleep(60)  # 出错后等待更长时间
 
 
 # 创建任务管理器实例
@@ -1914,6 +1991,31 @@ async def video_highlights_extract(request: VideoHighlightsRequest):
                     "error": str(e)
                 }
             )
+
+
+@app.post("/video/highlight-clip")
+async def video_highlight_clip(request: VideoHighlightClipRequest):
+    """基于Excel观看数据的视频高光剪辑 - 仅支持异步模式"""
+    # 强制使用异步模式
+    try:
+        args = {
+            "video_source": request.video_source,
+            "excel_source": request.excel_source,
+            "target_duration": request.target_duration,
+            "output_path": request.output_path
+        }
+        
+        task_id = await task_manager.submit_task(
+            func_name="process_video_highlight_clip",
+            args=args,
+            tenant_id=getattr(request, 'tenant_id', None),
+            business_id=getattr(request, 'id', None)
+        )
+        
+        return format_response(task_id, mode="async", urlpath=urlpath)
+    except Exception as e:
+        error_res = {"error": str(e), "function_name": "process_video_highlight_clip"}
+        return format_response(error_res, mode="sync", error_type="general_exception")
 
 
 # ========== Tongyi Wanxiang 文生图接口 ==========
