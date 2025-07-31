@@ -42,7 +42,7 @@ from core.clipgenerate.interface_model import (
     ServerStartRequest, ServerStopRequest, AutoIntroStartRequest, AutoIntroStopRequest,
     TextIndustryRequest, CopyGenerationRequest, CoverAnalysisRequest,
     VideoEditMainRequest, AIAvatarUnifiedRequest, TimelineGenerationRequest, TimelineModifyRequest,
-    VideoHighlightsRequest, VideoHighlightClipRequest
+    VideoHighlightsRequest, VideoHighlightClipRequest, NaturalLanguageVideoEditRequest
 )
 from core.clipgenerate.tongyi_wangxiang_model import (
     TextToImageV2Request, TextToImageV1Request, ImageBackgroundEditRequest,
@@ -98,6 +98,7 @@ from core.cliptemplate.coze.text_industry import get_text_industry
 from core.orchestrator.workflow_orchestrator import VideoEditingOrchestrator
 from core.text_generate.generator import get_copy_generation, CopyGenerator
 from core.cliptemplate.coze.t15 import extract_video_highlights_from_url
+from core.clipgenerate.natural_language_video_edit import process_natural_language_video_edit
 
 from core.cliptemplate.coze.refactored_api import UnifiedVideoAPI
 
@@ -3461,206 +3462,127 @@ async def analyze_cover_endpoint(
         raise HTTPException(status_code=500, detail=f"封面分析失败: {str(e)}")
 
 
-# ========== 时间轴生成接口 ==========
 
-@app.post("/video/timeline-generate")
-async def generate_timeline(request: TimelineGenerationRequest):
-    """生成视频时间轴 - AI自动化生成完整时间轴"""
-    mode = getattr(request, 'mode', 'async')
-
+@app.post("/video/natural-language-edit")
+async def video_natural_language_edit(request: NaturalLanguageVideoEditRequest):
+    """自然语言视频剪辑接口 - 集成AuraRender智能视频创作引擎"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+    
     # 定义实际处理逻辑
     async def process():
-        import time
-        start_time = time.time()
-
         try:
-            # 动态导入video_cut模块
-            import sys
-            import os
-            # 确保路径正确
-            video_cut_path = os.path.join(os.path.dirname(__file__), 'video_cut')
-            if video_cut_path not in sys.path:
-                sys.path.insert(0, video_cut_path)
-
-            from video_cut.core.controller import UnifiedController
-            from video_cut.main import load_dag_and_nodes
-
-            # 1. 加载DAG配置
-            dag, nodes = load_dag_and_nodes()
-            controller = UnifiedController(dag, nodes)
-
-            # 2. 构建输入上下文
-            context = {
-                "大纲内容": f"{request.title}: {request.content}",
-                "时长": request.duration,
-                "平台": request.platform,
-                "受众": request.audience,
-                "风格": request.style,
-                "包含字幕": request.include_subtitles,
-                "包含LOGO": request.include_logo,
-                "包含背景音乐": request.include_bgm,
-                "品牌色彩": request.brand_colors or ["蓝色", "白色"],
-                "特殊要求": request.special_requirements or ""
-            }
-
-            # 3. 执行生成
-            result = controller.handle_input({
-                "type": "generate",
-                "context": context
-            })
-
-            # 4. 提取最终时间轴 (node12 是时间轴节点)
-            final_timeline = result.get("node12", {})
-
-            # 5. 保存到warehouse并返回路径
-            import json
-            from config import get_user_data_dir
-
-            user_data_dir = get_user_data_dir()
-            timeline_dir = os.path.join(user_data_dir, "timelines")
-            os.makedirs(timeline_dir, exist_ok=True)
-
-            timeline_id = str(uuid.uuid4())
-            timeline_path = os.path.join(timeline_dir, f"{timeline_id}.json")
-
-            with open(timeline_path, 'w', encoding='utf-8') as f:
-                json.dump(final_timeline, f, ensure_ascii=False, indent=2)
-
-            # 计算处理时间
-            processing_time = round(time.time() - start_time, 2)
-
-            # 返回结果
-            return {
-                "timeline_id": timeline_id,
-                "timeline_path": f"timelines/{timeline_id}.json",
-                "timeline_data": final_timeline,
-                "processing_time": processing_time,
-                "node_outputs": result  # 包含所有节点的输出，便于调试
-            }
-
-        except Exception as e:
-            import traceback
-            error_detail = traceback.format_exc()
-            logger.error(f"时间轴生成失败: {error_detail}")
-            raise Exception(f"时间轴生成失败: {str(e)}")
-
-    # 使用统一的异步处理
-    if mode == "sync":
-        result = await process()
-        return enhance_endpoint_result(result, "generate_timeline", request)
-    else:
-        # 为异步模式创建一个同步包装函数
-        def generate_timeline(**kwargs):
-            # 过滤掉不需要的参数
-            filtered_kwargs = {k: v for k, v in kwargs.items() if k != 'mode'}
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(process())
-            finally:
-                loop.close()
-
-        # 注册到全局函数
-        globals()['generate_timeline'] = generate_timeline
-
-        return await handle_async_endpoint(
-            request,
-            generate_timeline,
-            "generate_timeline"
-        )
-
-
-@app.post("/video/timeline-modify")
-async def modify_timeline(request: TimelineModifyRequest):
-    """修改时间轴节点 - 支持增量更新"""
-    mode = getattr(request, 'mode', 'async')
-
-    async def process():
-        try:
-            import sys
-            sys.path.append('./video_cut')
-            from video_cut.core.controller import UnifiedController
-            from video_cut.main import load_dag_and_nodes
-
-            # 加载DAG
-            dag, nodes = load_dag_and_nodes()
-            controller = UnifiedController(dag, nodes)
-
-            # 加载缓存
-            controller.load_cache()
-
-            # 执行修改
-            result = controller.handle_input({
-                "type": "modify",
-                "modify": {
-                    "node_id": request.node_id,
-                    "changes": request.changes
+            # 判断是否使用AuraRender（默认使用）
+            use_aura_render = request.use_aura_render if hasattr(request, 'use_aura_render') else True
+            
+            print(f"🎬 [自然语言视频剪辑] 开始处理...")
+            print(f"   描述: {request.natural_language}")
+            print(f"   视频URL: {request.video_url}")
+            print(f"   模式: {mode}")
+            print(f"   使用AuraRender: {use_aura_render}")
+            
+            if use_aura_render:
+                # 使用AuraRender处理
+                from video_cut.aura_render.aura_interface import AuraRenderInterface
+                
+                aura_interface = AuraRenderInterface()
+                
+                # 构建AuraRender请求
+                aura_request = {
+                    'natural_language': request.natural_language,
+                    'video_url': request.video_url,
+                    'preferences': {}
                 }
-            })
-
-            # 获取更新后的时间轴
-            final_timeline = result.get("final_timeline", {})
-
-            return {
-                "status": "success",
-                "modified_node": request.node_id,
-                "affected_nodes": controller.dag_engine.get_affected_nodes(request.node_id),
-                "timeline_data": final_timeline
-            }
-
+                
+                # 添加偏好设置
+                if request.output_duration:
+                    aura_request['preferences']['duration'] = request.output_duration
+                if request.style:
+                    aura_request['preferences']['style'] = request.style
+                if hasattr(request, 'video_type'):
+                    aura_request['preferences']['video_type'] = request.video_type
+                
+                # 调用AuraRender
+                result = aura_interface.create_video(aura_request)
+                
+                # 转换结果格式
+                if result['status'] == 'success':
+                    enhanced_result = {
+                        "video_url": result['video_url'],
+                        "timeline": result.get('script', {}).get('timeline', []),
+                        "video_info": {
+                            "duration": result['metadata'].get('duration', 0),
+                            "video_type": result['metadata'].get('video_type', ''),
+                            "style": result['metadata'].get('style', {})
+                        },
+                        "process_info": {
+                            "engine": "AuraRender",
+                            "script_path": result['metadata'].get('script_path', ''),
+                            "created_at": result['metadata'].get('created_at', '')
+                        },
+                        "execution_script": result.get('script', {})  # 返回完整的执行脚本供调试
+                    }
+                else:
+                    raise Exception(result.get('error', 'AuraRender处理失败'))
+                    
+            else:
+                # 使用原有的处理逻辑
+                from core.clipgenerate.natural_language_video_edit import process_natural_language_video_edit
+                
+                # 处理视频
+                result = process_natural_language_video_edit(
+                    natural_language=request.natural_language,
+                    video_url=request.video_url,
+                    output_duration=request.output_duration,
+                    style=request.style,
+                    use_timeline_editor=request.use_timeline_editor
+                )
+                
+                # 检查处理结果
+                if not result.get("success", False):
+                    raise Exception(result.get("error", "处理失败"))
+                
+                # 使用增强函数处理结果
+                enhanced_result = {
+                    "video_url": result.get("video_url"),
+                    "timeline": result.get("timeline"),
+                    "video_info": result.get("video_info"),
+                    "process_info": result.get("process_info")
+                }
+            
+            return enhance_endpoint_result(enhanced_result, "natural_language_video_edit", request, is_digital_human=False)
+            
         except Exception as e:
-            raise Exception(f"时间轴修改失败: {str(e)}")
-
-    # 使用统一的异步处理
-    if mode == "sync":
-        result = await process()
-        return enhance_endpoint_result(result, "modify_timeline", request)
+            error_res = {"error": str(e), "function_name": "natural_language_video_edit"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    
+    # 处理异步模式
+    if mode == "async":
+        try:
+            # 准备异步任务参数
+            args = {
+                "natural_language": request.natural_language,
+                "video_url": request.video_url,
+                "output_duration": request.output_duration,
+                "style": request.style,
+                "use_timeline_editor": request.use_timeline_editor
+            }
+            
+            # 提交异步任务
+            task_id = await task_manager.submit_task(
+                func_name="process_natural_language_video_edit",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "natural_language_video_edit"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
     else:
-        # 为异步模式创建一个同步包装函数
-        def modify_timeline(**kwargs):
-            import asyncio
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                return loop.run_until_complete(process())
-            finally:
-                loop.close()
-
-        # 注册到全局函数
-        globals()['modify_timeline'] = modify_timeline
-
-        return await handle_async_endpoint(
-            request,
-            modify_timeline,
-            "modify_timeline"
-        )
-
-
-@app.get("/video/timeline/{timeline_id}")
-async def get_timeline(timeline_id: str):
-    """获取时间轴数据"""
-    try:
-        import json
-        from config import get_user_data_dir
-
-        user_data_dir = get_user_data_dir()
-        timeline_path = os.path.join(user_data_dir, "timelines", f"{timeline_id}.json")
-
-        if not os.path.exists(timeline_path):
-            raise HTTPException(status_code=404, detail="时间轴不存在")
-
-        with open(timeline_path, 'r', encoding='utf-8') as f:
-            timeline_data = json.load(f)
-
-        return {
-            "status": "success",
-            "timeline_id": timeline_id,
-            "timeline_data": timeline_data
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # 同步模式
+        return await process()
 
 
 if __name__ == "__main__":

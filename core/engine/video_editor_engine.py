@@ -10,7 +10,7 @@ import os
 import json
 import subprocess
 from typing import Dict, Any, List, Union
-from moviepy.editor import VideoFileClip, concatenate_videoclips, CompositeVideoClip
+from moviepy import VideoFileClip, concatenate_videoclips, CompositeVideoClip
 from moviepy import vfx
 import tempfile
 

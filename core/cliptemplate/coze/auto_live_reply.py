@@ -4,7 +4,7 @@ import random
 import dashscope
 from dashscope import Generation
 from dashscope.audio.tts_v2 import SpeechSynthesizer
-from playsound import playsound
+from .audio_player import AudioPlayer, play_audio_async
 import json
 import time
 import os
@@ -591,24 +591,12 @@ class WebSocketClient:
             # 播放语音
             if audio_file and os.path.exists(audio_file):
                 print(f"🎵 正在播放自动介绍音频：{audio_file}")
-                try:
-                    playsound(audio_file)
-
-                    # 播放完成后删除临时音频文件
-                    try:
-                        os.remove(audio_file)
-                        print(f"🗑️ 已删除临时音频文件：{audio_file}")
-                    except Exception as delete_error:
-                        print(f"⚠️ 删除音频文件失败: {delete_error}")
-
-                except Exception as e:
-                    print(f"❌ 播放音频失败: {e}")
-                    # 即使播放失败也尝试删除文件
-                    try:
-                        os.remove(audio_file)
-                        print(f"🗑️ 已删除音频文件：{audio_file}")
-                    except Exception as delete_error:
-                        print(f"⚠️ 删除音频文件失败: {delete_error}")
+                
+                # 使用改进的异步播放器，自动处理清理
+                play_audio_async(audio_file, delete_after=True)
+                
+                # 给音频播放一点启动时间
+                time.sleep(0.5)
 
             # 更新最后消息时间，避免在播放期间又触发新的介绍
             self.last_message_time = time.time()

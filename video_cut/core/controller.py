@@ -1,5 +1,6 @@
 from video_cut.core.dag_engine import DAGEngine
 from video_cut.core.instance_manager import InstanceManager
+from video_cut.core.nl_processor import NLProcessor
 
 
 class UnifiedController:
@@ -7,6 +8,7 @@ class UnifiedController:
         self.dag_engine = DAGEngine(dag)
         self.nodes = nodes
         self.outputs = {}
+        self.nl_processor = NLProcessor()
 
     def load_cache(self):
         for node_id in self.nodes:
@@ -44,11 +46,27 @@ class UnifiedController:
 
         return self.outputs
 
+    def run_nl_generate(self, natural_language_input):
+        """处理自然语言输入并生成视频"""
+        # 将自然语言转换为大纲
+        outline = self.nl_processor.process_natural_language(natural_language_input)
+        
+        # 创建context
+        context = {
+            "大纲内容": outline
+        }
+        
+        # 运行生成流程
+        return self.run_generate(context)
+
     def handle_input(self, user_input):
         self.load_cache()
         if user_input["type"] == "generate":
             return self.run_generate(user_input.get("context", {}))
         elif user_input["type"] == "modify":
             return self.run_modify(user_input.get("modify", {}))
+        elif user_input["type"] == "nl_generate":
+            # 处理自然语言生成
+            return self.run_nl_generate(user_input.get("natural_language", ""))
         else:
             raise ValueError("不支持的请求类型")

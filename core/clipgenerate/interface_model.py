@@ -197,7 +197,7 @@ class ServerStartRequest(BaseModel):
 
 class AutoIntroStartRequest(BaseModel):
     """自动产品介绍启动请求"""
-    host: Optional[str] = Field("10.211.55.3", description="WebSocket服务器IP")
+    host: Optional[str] = Field("127.0.0.1", description="WebSocket服务器IP")
     port: Optional[int] = Field(8888, description="WebSocket服务器端口")
     reply_probability: Optional[float] = Field(0.3, description="随机回复概率")
     max_queue_size: Optional[int] = Field(5, description="最大消息队列长度")
@@ -401,3 +401,18 @@ class VideoHighlightsRequest(BaseModel):
     upload_to_oss: Optional[bool] = Field(default=True, description="是否上传到OSS")
     tenant_id: Optional[str] = Field(None, description="租户ID")
     id: Optional[str] = Field(None, description="业务ID")
+
+
+class NaturalLanguageVideoEditRequest(BaseModel):
+    """自然语言视频剪辑请求"""
+    natural_language: str = Field(..., description="自然语言描述，如：制作一个1分钟的产品介绍视频")
+    video_url: str = Field(..., description="视频URL地址")
+    mode: Optional[str] = Field('async', description="处理模式：sync/async")
+    output_duration: Optional[int] = Field(None, description="输出视频时长（秒），如不指定则从描述中解析")
+    style: Optional[str] = Field(None, description="视频风格，如不指定则从描述中解析")
+    use_timeline_editor: Optional[bool] = Field(True, description="是否使用时间轴编辑器")
+    categoryId: Optional[str] = Field(None, description="分类ID")
+    tenant_id: Optional[str] = Field(None, description="租户ID")
+    id: Optional[str] = Field(None, description="业务ID")
+    use_aura_render: Optional[bool] = Field(True, description="是否使用AuraRender引擎")
+    video_type: Optional[str] = Field(None, description="视频类型：product_ad/brand_promo/knowledge_explain等")
