@@ -4,7 +4,7 @@ import random
 import dashscope
 from dashscope import Generation
 from dashscope.audio.tts_v2 import SpeechSynthesizer
-from playsound import playsound
+# from playsound import playsound  # 已替换为跨平台音频播放器
 
 from .audio_player import AudioPlayer, play_audio_async
 import json
@@ -489,14 +489,9 @@ class WebSocketClient:
             if audio_file and os.path.exists(audio_file):
                 print(f"🎵 正在播放AI回复音频：{audio_file}")
                 try:
-                    playsound(audio_file)
-
-                    # 播放完成后删除临时音频文件
-                    try:
-                        os.remove(audio_file)
-                        print(f"🗑️ 已删除临时音频文件：{audio_file}")
-                    except Exception as delete_error:
-                        print(f"⚠️ 删除音频文件失败: {delete_error}")
+                    # 使用跨平台音频播放器
+                    play_audio_async(audio_file, delete_after=True)
+                    print("✅ 音频播放任务已启动")
 
                 except Exception as e:
                     print(f"❌ 播放音频失败: {e}")
@@ -1102,14 +1097,9 @@ class SocketServer:
             if audio_file and os.path.exists(audio_file):
                 print(f"🎵 正在播放音频：{audio_file}")
                 try:
-                    playsound(audio_file)
-
-                    # 播放完成后删除临时音频文件
-                    try:
-                        os.remove(audio_file)
-                        print(f"🗑️ 已删除临时音频文件：{audio_file}")
-                    except Exception as delete_error:
-                        print(f"⚠️ 删除音频文件失败: {delete_error}")
+                    # 使用跨平台音频播放器
+                    play_audio_async(audio_file, delete_after=True)
+                    print("✅ 音频播放任务已启动")
 
                 except Exception as e:
                     print(f"❌ 播放失败: {e}")
