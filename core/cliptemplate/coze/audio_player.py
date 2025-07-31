@@ -60,17 +60,35 @@ class AudioPlayer:
             pythoncom.CoInitialize()
             try:
                 wmp = win32com.client.Dispatch("WMPlayer.OCX")
-                media = wmp.newMedia(audio_file)
-                wmp.currentPlaylist.appendItem(media)
+                
+                # 设置音量为最大
+                wmp.settings.volume = 100
+                print(f"🔊 设置音量为: {wmp.settings.volume}")
+                
+                # 加载并播放音频
+                wmp.URL = audio_file
                 wmp.controls.play()
                 
+                # 等待播放器准备就绪
+                time.sleep(0.5)
+                
                 print(f"✅ Windows COM播放启动成功")
+                print(f"🎵 播放状态: {wmp.playState}, 文件: {wmp.currentMedia.name if wmp.currentMedia else 'Unknown'}")
                 
                 if block:
-                    # 等待播放完成
-                    while wmp.playState != 1:  # 1 = stopped
-                        time.sleep(0.1)
-                    print(f"✅ Windows COM播放完成")
+                    # 等待播放完成 (状态码: 1=停止, 2=暂停, 3=播放, 6=缓冲, 7=等待, 8=准备就绪, 9=重连, 10=就绪)
+                    max_wait = 30  # 最多等待30秒
+                    waited = 0
+                    while wmp.playState != 1 and waited < max_wait:
+                        time.sleep(0.2)
+                        waited += 0.2
+                        if waited % 2 == 0:  # 每2秒打印一次状态
+                            print(f"📊 播放状态: {wmp.playState}, 已等待: {waited:.1f}s")
+                    
+                    if waited >= max_wait:
+                        print(f"⏰ 播放超时，强制结束")
+                    else:
+                        print(f"✅ Windows COM播放完成")
                 return True
             finally:
                 # 清理COM
@@ -90,6 +108,11 @@ class AudioPlayer:
             if not pygame.mixer.get_init():
                 pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
                 print(f"🎮 pygame mixer初始化成功")
+            else:
+                print(f"🎮 pygame mixer已初始化: {pygame.mixer.get_init()}")
+            
+            # 设置音量
+            pygame.mixer.music.set_volume(1.0)  # 最大音量
             
             pygame.mixer.music.load(audio_file)
             pygame.mixer.music.play()
@@ -97,9 +120,19 @@ class AudioPlayer:
             print(f"✅ pygame播放启动成功")
             
             if block:
-                while pygame.mixer.music.get_busy():
+                max_wait = 30  # 最多等待30秒
+                waited = 0
+                while pygame.mixer.music.get_busy() and waited < max_wait:
                     pygame.time.Clock().tick(10)
-                print(f"✅ pygame播放完成")
+                    waited += 0.1
+                    if int(waited) % 2 == 0 and waited - int(waited) < 0.1:  # 每2秒打印一次
+                        print(f"📊 pygame播放中，已等待: {waited:.1f}s")
+                
+                if waited >= max_wait:
+                    print(f"⏰ pygame播放超时，强制停止")
+                    pygame.mixer.music.stop()
+                else:
+                    print(f"✅ pygame播放完成")
             return True
         except (ImportError, Exception) as e:
             print(f"❌ pygame音频播放失败: {e}")

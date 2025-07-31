@@ -2666,7 +2666,7 @@ async def list_all_tasks(status: Optional[str] = Query(None, description="筛选
 
 # ========== 配置管理接口 ==========
 
-@app.put('/api/product')
+@app.post('/api/product')
 async def update_product_info(
         request: ProductConfigRequest,
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
@@ -2727,7 +2727,7 @@ async def update_product_info(
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
 
 
-@app.put('/api/voice/live_config')
+@app.post('/api/voice/live_config')
 async def update_voice_config(
         request: VoiceConfigRequest,
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
