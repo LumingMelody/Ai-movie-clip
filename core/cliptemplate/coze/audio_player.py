@@ -52,23 +52,36 @@ class AudioPlayer:
         try:
             # 方法1: 使用 Windows Media Player COM 对象
             import win32com.client
-            wmp = win32com.client.Dispatch("WMPlayer.OCX")
-            media = wmp.newMedia(audio_file)
-            wmp.currentPlaylist.appendItem(media)
-            wmp.controls.play()
+            import pythoncom
             
-            if block:
-                # 等待播放完成
-                while wmp.playState != 1:  # 1 = stopped
-                    time.sleep(0.1)
-            return True
-        except ImportError:
+            # 初始化COM
+            pythoncom.CoInitialize()
+            try:
+                wmp = win32com.client.Dispatch("WMPlayer.OCX")
+                media = wmp.newMedia(audio_file)
+                wmp.currentPlaylist.appendItem(media)
+                wmp.controls.play()
+                
+                if block:
+                    # 等待播放完成
+                    while wmp.playState != 1:  # 1 = stopped
+                        time.sleep(0.1)
+                return True
+            finally:
+                # 清理COM
+                pythoncom.CoUninitialize()
+                
+        except (ImportError, Exception):
             pass
         
         try:
             # 方法2: 使用 pygame
             import pygame
-            pygame.mixer.init()
+            
+            # 初始化pygame mixer，如果已经初始化会自动跳过
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+            
             pygame.mixer.music.load(audio_file)
             pygame.mixer.music.play()
             
@@ -76,22 +89,27 @@ class AudioPlayer:
                 while pygame.mixer.music.get_busy():
                     pygame.time.Clock().tick(10)
             return True
-        except ImportError:
+        except (ImportError, Exception) as e:
+            print(f"⚠️ pygame音频播放失败: {e}")
             pass
         
         try:
             # 方法3: 使用 Windows 内置命令
-            # 使用 powershell 播放音频
-            cmd = [
-                'powershell', '-c',
-                f'(New-Object Media.SoundPlayer "{audio_file}").PlaySync()'
-            ]
-            if block:
-                subprocess.run(cmd, shell=False, capture_output=True)
-            else:
-                subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            return True
-        except:
+            # 使用 powershell 播放音频（支持WAV格式）
+            if audio_file.lower().endswith('.wav'):
+                cmd = [
+                    'powershell', '-c',
+                    f'(New-Object Media.SoundPlayer "{audio_file}").PlaySync()'
+                ]
+                if block:
+                    result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+                    if result.returncode == 0:
+                        return True
+                else:
+                    subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    return True
+        except Exception as e:
+            print(f"⚠️ PowerShell音频播放失败: {e}")
             pass
         
         # 方法4: 最后的尝试 - 使用默认程序打开
