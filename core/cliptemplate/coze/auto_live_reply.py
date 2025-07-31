@@ -4,6 +4,8 @@ import random
 import dashscope
 from dashscope import Generation
 from dashscope.audio.tts_v2 import SpeechSynthesizer
+from playsound import playsound
+
 from .audio_player import AudioPlayer, play_audio_async
 import json
 import time

@@ -9,7 +9,7 @@ from typing import Optional
 from pathlib import Path
 
 
-def download_file_with_retry(url: str, save_path: str, max_retries: int = 3, timeout: int = 30) -> bool:
+def download_file_with_retry(url: str, save_path: str, max_retries: int = 3, timeout: int = 30, verbose: bool = True) -> bool:
     """
     下载文件并支持重试
     
@@ -18,6 +18,7 @@ def download_file_with_retry(url: str, save_path: str, max_retries: int = 3, tim
         save_path: 保存路径
         max_retries: 最大重试次数
         timeout: 超时时间（秒）
+        verbose: 是否显示详细进度信息
         
     Returns:
         是否下载成功
@@ -27,7 +28,8 @@ def download_file_with_retry(url: str, save_path: str, max_retries: int = 3, tim
     
     for attempt in range(max_retries):
         try:
-            print(f"下载文件: {url} -> {save_path} (尝试 {attempt + 1}/{max_retries})")
+            if verbose:
+                print(f"下载文件: {url} -> {save_path} (尝试 {attempt + 1}/{max_retries})")
             
             # 发送请求
             response = requests.get(url, stream=True, timeout=timeout)
@@ -45,22 +47,26 @@ def download_file_with_retry(url: str, save_path: str, max_retries: int = 3, tim
                         downloaded += len(chunk)
                         
                         # 显示进度
-                        if total_size > 0:
+                        if verbose and total_size > 0:
                             progress = (downloaded / total_size) * 100
                             print(f"\r下载进度: {progress:.1f}%", end='', flush=True)
             
-            print()  # 换行
-            print(f"✅ 文件下载成功: {save_path}")
+            if verbose:
+                print()  # 换行
+                print(f"✅ 文件下载成功: {save_path}")
             return True
             
         except requests.exceptions.RequestException as e:
-            print(f"❌ 下载失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
+            if verbose:
+                print(f"❌ 下载失败 (尝试 {attempt + 1}/{max_retries}): {str(e)}")
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 2  # 递增等待时间
-                print(f"等待 {wait_time} 秒后重试...")
+                if verbose:
+                    print(f"等待 {wait_time} 秒后重试...")
                 time.sleep(wait_time)
             else:
-                print(f"❌ 下载失败，已达到最大重试次数")
+                if verbose:
+                    print(f"❌ 下载失败，已达到最大重试次数")
                 return False
     
     return False

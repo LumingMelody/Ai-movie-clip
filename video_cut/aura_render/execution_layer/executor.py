@@ -105,9 +105,14 @@ class AuraExecutor:
             'text': {}
         }
         
+        print(f"📦 加载资源配置中...")
+        
         # 加载视频资源
         for video in resources_config.get('videos', []):
             video_id = video['id']
+            video_source = video['source']
+            print(f"🎬 加载视频资源: {video_id}")
+            
             if video['source'] == 'ai_generated':
                 # 使用AI生成视频
                 video_path = self._generate_video(video['params'])
@@ -116,12 +121,18 @@ class AuraExecutor:
                 video_path = self._load_media_file(video['source'])
             
             if video_path:
-                clip = VideoFileClip(video_path)
-                # 应用时长限制
-                if 'duration' in video:
-                    # MoviePy 2.x 使用 subclipped
-                    clip = clip.subclipped(0, min(video['duration'], clip.duration))
-                resources['videos'][video_id] = clip
+                try:
+                    clip = VideoFileClip(video_path)
+                    # 应用时长限制
+                    if 'duration' in video:
+                        # MoviePy 2.x 使用 subclipped
+                        clip = clip.subclipped(0, min(video['duration'], clip.duration))
+                    resources['videos'][video_id] = clip
+                    print(f"✅ 视频资源 {video_id} 加载成功，时长: {clip.duration}s")
+                except Exception as e:
+                    print(f"❌ 加载视频文件失败: {video_path}, 错误: {e}")
+            else:
+                print(f"❌ 视频资源 {video_id} 加载失败: 无法获取文件路径")
         
         # 加载图片资源
         for image in resources_config.get('images', []):
@@ -199,12 +210,14 @@ class AuraExecutor:
         
         if layer_type == 'video':
             resource_id = layer['resource_id']
+            
             if resource_id in resources['videos']:
                 clip = resources['videos'][resource_id].copy()
                 # MoviePy 2.x 使用 with_duration
                 clip = clip.with_duration(duration)
             else:
                 # 如果视频资源不存在，创建一个占位文本
+                print(f"⚠️ 视频资源不存在: {resource_id}，创建占位内容")
                 clip = TextClip(
                     text=f"视频片段: {resource_id}",
                     font='Arial',
@@ -399,17 +412,31 @@ class AuraExecutor:
                 
             elif source.startswith('http'):
                 # 下载网络文件
-                local_path = os.path.join(self.temp_dir, os.path.basename(source))
-                download_file_with_retry(source, local_path)
-                self.resources_cache[source] = local_path
-                return local_path
+                print(f"📥 下载网络文件...")
+                filename = os.path.basename(source.split('?')[0])  # 处理URL参数
+                if not filename:
+                    filename = f"downloaded_{int(datetime.now().timestamp())}.mp4"
+                local_path = os.path.join(self.temp_dir, filename)
+                
+                # 导入下载函数
+                from core.utils.file_utils import download_file_with_retry
+                success = download_file_with_retry(source, local_path, verbose=False)
+                
+                if success and os.path.exists(local_path):
+                    self.resources_cache[source] = local_path
+                    return local_path
+                else:
+                    print(f"❌ 网络文件下载失败")
+                    return None
                 
             elif os.path.exists(source):
                 # 本地文件
                 self.resources_cache[source] = source
                 return source
+            else:
+                print(f"❌ 文件不存在: {source}")
                 
         except Exception as e:
-            print(f"加载资源失败: {source}, 错误: {e}")
+            print(f"❌ 加载资源失败: {e}")
             
         return None
