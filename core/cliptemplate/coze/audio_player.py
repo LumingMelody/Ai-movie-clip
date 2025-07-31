@@ -54,6 +54,8 @@ class AudioPlayer:
             import win32com.client
             import pythoncom
             
+            print(f"🔊 尝试Windows COM音频播放: {audio_file}")
+            
             # 初始化COM
             pythoncom.CoInitialize()
             try:
@@ -62,54 +64,77 @@ class AudioPlayer:
                 wmp.currentPlaylist.appendItem(media)
                 wmp.controls.play()
                 
+                print(f"✅ Windows COM播放启动成功")
+                
                 if block:
                     # 等待播放完成
                     while wmp.playState != 1:  # 1 = stopped
                         time.sleep(0.1)
+                    print(f"✅ Windows COM播放完成")
                 return True
             finally:
                 # 清理COM
                 pythoncom.CoUninitialize()
                 
-        except (ImportError, Exception):
+        except (ImportError, Exception) as e:
+            print(f"❌ Windows COM播放失败: {e}")
             pass
         
         try:
             # 方法2: 使用 pygame
             import pygame
             
+            print(f"🔊 尝试pygame音频播放: {audio_file}")
+            
             # 初始化pygame mixer，如果已经初始化会自动跳过
             if not pygame.mixer.get_init():
                 pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+                print(f"🎮 pygame mixer初始化成功")
             
             pygame.mixer.music.load(audio_file)
             pygame.mixer.music.play()
             
+            print(f"✅ pygame播放启动成功")
+            
             if block:
                 while pygame.mixer.music.get_busy():
                     pygame.time.Clock().tick(10)
+                print(f"✅ pygame播放完成")
             return True
         except (ImportError, Exception) as e:
-            print(f"⚠️ pygame音频播放失败: {e}")
+            print(f"❌ pygame音频播放失败: {e}")
             pass
         
         try:
-            # 方法3: 使用 Windows 内置命令
-            # 使用 powershell 播放音频（支持WAV格式）
+            # 方法3: 使用 Windows 内置命令播放MP3/WAV
+            print(f"🔊 尝试Windows PowerShell播放: {audio_file}")
+            
             if audio_file.lower().endswith('.wav'):
+                # WAV文件使用SoundPlayer
                 cmd = [
                     'powershell', '-c',
                     f'(New-Object Media.SoundPlayer "{audio_file}").PlaySync()'
                 ]
-                if block:
-                    result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
-                    if result.returncode == 0:
-                        return True
-                else:
-                    subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            else:
+                # MP3文件使用Windows Media Player
+                cmd = [
+                    'powershell', '-c',
+                    f'Add-Type -AssemblyName presentationCore; $player = New-Object System.Windows.Media.MediaPlayer; $player.Open([uri]"{audio_file}"); $player.Play(); Start-Sleep -Seconds 5'
+                ]
+            
+            if block:
+                result = subprocess.run(cmd, shell=False, capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"✅ PowerShell播放成功")
                     return True
+                else:
+                    print(f"❌ PowerShell播放失败: {result.stderr}")
+            else:
+                subprocess.Popen(cmd, shell=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                print(f"✅ PowerShell播放启动成功")
+                return True
         except Exception as e:
-            print(f"⚠️ PowerShell音频播放失败: {e}")
+            print(f"❌ PowerShell音频播放失败: {e}")
             pass
         
         # 方法4: 最后的尝试 - 使用默认程序打开
@@ -163,16 +188,35 @@ def play_audio_async(audio_file, delete_after=True):
         delete_after: 是否在播放后删除文件
     """
     def _play_and_cleanup():
+        print(f"🎵 开始播放音频: {audio_file}")
+        
+        if not os.path.exists(audio_file):
+            print(f"❌ 音频文件不存在: {audio_file}")
+            return
+            
         success = AudioPlayer.play(audio_file, block=True)
+        
+        if success:
+            print(f"✅ 音频播放完成: {audio_file}")
+        else:
+            print(f"❌ 音频播放失败: {audio_file}")
         
         if delete_after and os.path.exists(audio_file):
             # 等待一小段时间确保文件句柄已释放
-            time.sleep(0.5)
+            print(f"⏳ 等待文件句柄释放...")
+            time.sleep(1.0)  # 增加等待时间
             try:
                 os.remove(audio_file)
                 print(f"🗑️ 已删除临时音频文件：{audio_file}")
             except Exception as e:
                 print(f"⚠️ 删除音频文件失败: {e}")
+                # 尝试再次删除
+                try:
+                    time.sleep(2.0)
+                    os.remove(audio_file)
+                    print(f"🗑️ 延迟删除成功：{audio_file}")
+                except Exception as e2:
+                    print(f"❌ 延迟删除仍然失败: {e2}")
     
     thread = threading.Thread(target=_play_and_cleanup)
     thread.daemon = True

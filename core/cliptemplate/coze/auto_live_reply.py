@@ -377,7 +377,7 @@ class WebSocketClient:
             while self.running:
                 try:
                     message = await self.websocket.recv()
-                    print(f"📥 收到来自WebSocket服务器的消息: {message}")
+                    # print(f"📥 收到来自WebSocket服务器的消息: {message}")
 
                     # 处理接收到的消息
                     await self._process_received_message(message)
@@ -411,7 +411,7 @@ class WebSocketClient:
 
                 # 只处理Type为1的消息
                 if msg_type != 1:
-                    print(f"📨 忽略非Type=1的消息: Type={msg_type}")
+                    # print(f"📨 忽略非Type=1的消息: Type={msg_type}")
                     return
 
                 # 解析Data字段中的JSON
