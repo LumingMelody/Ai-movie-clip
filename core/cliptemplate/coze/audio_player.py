@@ -49,8 +49,20 @@ class AudioPlayer:
     @staticmethod
     def _play_windows(audio_file, block):
         """Windows 平台播放音频"""
+        # 验证文件格式和大小
         try:
-            # 方法1: 使用 Windows Media Player COM 对象
+            file_size = os.path.getsize(audio_file)
+            print(f"📁 音频文件信息: {os.path.basename(audio_file)}, 大小: {file_size} 字节")
+            
+            if file_size == 0:
+                print(f"❌ 音频文件为空，无法播放")
+                return False
+        except Exception as e:
+            print(f"❌ 无法读取音频文件信息: {e}")
+            return False
+        
+        # 方法1: 使用 Windows Media Player COM 对象
+        try:
             import win32com.client
             import pythoncom
             
@@ -61,41 +73,125 @@ class AudioPlayer:
             try:
                 wmp = win32com.client.Dispatch("WMPlayer.OCX")
                 
-                # 设置音量为最大
-                wmp.settings.volume = 100
-                print(f"🔊 设置音量为: {wmp.settings.volume}")
+                # 检查播放器版本和能力
+                try:
+                    version = wmp.versionInfo
+                    print(f"🎮 Windows Media Player版本: {version}")
+                except:
+                    print(f"🎮 Windows Media Player版本: 未知")
                 
-                # 加载并播放音频
+                # 设置音量和静音状态
+                wmp.settings.volume = 100
+                wmp.settings.mute = False
+                print(f"🔊 音量设置: {wmp.settings.volume}, 静音: {wmp.settings.mute}")
+                
+                # 先停止任何正在播放的内容
+                try:
+                    wmp.controls.stop()
+                    time.sleep(0.2)
+                except:
+                    pass
+                
+                # 加载音频文件
+                print(f"📂 正在加载音频文件...")
                 wmp.URL = audio_file
+                
+                # 等待文件加载
+                load_timeout = 5
+                load_waited = 0
+                while load_waited < load_timeout:
+                    try:
+                        if wmp.currentMedia and wmp.currentMedia.duration > 0:
+                            print(f"✅ 文件加载成功，时长: {wmp.currentMedia.duration}秒")
+                            break
+                    except:
+                        pass
+                    time.sleep(0.2)
+                    load_waited += 0.2
+                
+                if load_waited >= load_timeout:
+                    print(f"⚠️ 文件加载超时，尝试直接播放")
+                
+                # 开始播放
+                print(f"▶️ 开始播放...")
                 wmp.controls.play()
                 
-                # 等待播放器准备就绪
-                time.sleep(0.5)
+                # 短暂等待播放开始
+                time.sleep(1.0)
                 
-                print(f"✅ Windows COM播放启动成功")
-                print(f"🎵 播放状态: {wmp.playState}, 文件: {wmp.currentMedia.name if wmp.currentMedia else 'Unknown'}")
+                # 状态码映射
+                state_names = {
+                    0: "未定义", 1: "停止", 2: "暂停", 3: "播放", 
+                    4: "扫描前进", 5: "扫描后退", 6: "缓冲", 
+                    7: "等待", 8: "准备就绪", 9: "重连/错误", 10: "就绪"
+                }
                 
-                if block:
-                    # 等待播放完成 (状态码: 1=停止, 2=暂停, 3=播放, 6=缓冲, 7=等待, 8=准备就绪, 9=重连, 10=就绪)
-                    max_wait = 30  # 最多等待30秒
-                    waited = 0
-                    while wmp.playState != 1 and waited < max_wait:
-                        time.sleep(0.2)
-                        waited += 0.2
-                        if waited % 2 == 0:  # 每2秒打印一次状态
-                            print(f"📊 播放状态: {wmp.playState}, 已等待: {waited:.1f}s")
+                current_state = wmp.playState
+                state_name = state_names.get(current_state, f"未知({current_state})")
+                print(f"🎵 当前播放状态: {current_state} ({state_name})")
+                
+                # 如果是错误状态，尝试其他方法
+                if current_state == 9:
+                    print(f"⚠️ COM播放器遇到错误，尝试其他播放方法")
+                    raise Exception("COM播放器状态错误")
+                
+                # 检查是否真的在播放
+                if current_state in [3, 6, 7, 8]:  # 播放、缓冲、等待、准备就绪
+                    print(f"✅ Windows COM播放启动成功")
                     
-                    if waited >= max_wait:
-                        print(f"⏰ 播放超时，强制结束")
-                    else:
-                        print(f"✅ Windows COM播放完成")
-                return True
+                    if block:
+                        # 等待播放完成
+                        max_wait = 30  # 最多等待30秒
+                        waited = 0
+                        last_state = current_state
+                        retry_count = 0
+                        
+                        while wmp.playState not in [1, 0] and waited < max_wait:
+                            time.sleep(0.3)
+                            waited += 0.3
+                            
+                            current_state = wmp.playState
+                            if current_state != last_state:
+                                state_name = state_names.get(current_state, f"未知({current_state})")
+                                print(f"🔄 播放状态变化: {last_state} → {current_state} ({state_name})")
+                                last_state = current_state
+                            
+                            # 每3秒打印一次状态
+                            if int(waited) % 3 == 0 and waited - int(waited) < 0.3:
+                                state_name = state_names.get(current_state, f"未知({current_state})")
+                                print(f"📊 播放状态: {current_state} ({state_name}), 已播放: {waited:.1f}s")
+                            
+                            # 如果状态是错误且重试次数少于2次
+                            if current_state == 9 and retry_count < 2:
+                                print(f"⚠️ 检测到错误状态，尝试重新播放 (第{retry_count + 1}次)")
+                                wmp.controls.stop()
+                                time.sleep(0.5)
+                                wmp.controls.play()
+                                time.sleep(1.0)
+                                retry_count += 1
+                                waited = 0  # 重置等待时间
+                        
+                        if waited >= max_wait:
+                            print(f"⏰ 播放超时，强制结束")
+                            wmp.controls.stop()
+                        else:
+                            print(f"✅ Windows COM播放完成")
+                    
+                    return True
+                else:
+                    print(f"❌ COM播放器未能正常启动播放")
+                    raise Exception(f"播放器状态异常: {current_state}")
+                    
             finally:
                 # 清理COM
-                pythoncom.CoUninitialize()
+                try:
+                    pythoncom.CoUninitialize()
+                except:
+                    pass
                 
         except (ImportError, Exception) as e:
             print(f"❌ Windows COM播放失败: {e}")
+            # 继续尝试其他方法
             pass
         
         try:
@@ -104,36 +200,62 @@ class AudioPlayer:
             
             print(f"🔊 尝试pygame音频播放: {audio_file}")
             
-            # 初始化pygame mixer，如果已经初始化会自动跳过
-            if not pygame.mixer.get_init():
-                pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-                print(f"🎮 pygame mixer初始化成功")
-            else:
-                print(f"🎮 pygame mixer已初始化: {pygame.mixer.get_init()}")
+            # 先停止现有播放
+            try:
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+                    pygame.mixer.quit()
+                    time.sleep(0.2)
+            except:
+                pass
+            
+            # 重新初始化pygame mixer，使用更好的设置
+            try:
+                pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
+                pygame.mixer.init()
+                print(f"🎮 pygame mixer初始化成功: {pygame.mixer.get_init()}")
+            except Exception as init_e:
+                print(f"⚠️ pygame初始化警告: {init_e}")
+                # 尝试简单初始化
+                pygame.mixer.init()
             
             # 设置音量
             pygame.mixer.music.set_volume(1.0)  # 最大音量
             
+            # 加载和播放
             pygame.mixer.music.load(audio_file)
             pygame.mixer.music.play()
             
-            print(f"✅ pygame播放启动成功")
-            
-            if block:
-                max_wait = 30  # 最多等待30秒
-                waited = 0
-                while pygame.mixer.music.get_busy() and waited < max_wait:
-                    pygame.time.Clock().tick(10)
-                    waited += 0.1
-                    if int(waited) % 2 == 0 and waited - int(waited) < 0.1:  # 每2秒打印一次
-                        print(f"📊 pygame播放中，已等待: {waited:.1f}s")
+            # 检查播放状态
+            time.sleep(0.5)
+            if pygame.mixer.music.get_busy():
+                print(f"✅ pygame播放启动成功")
                 
-                if waited >= max_wait:
-                    print(f"⏰ pygame播放超时，强制停止")
-                    pygame.mixer.music.stop()
-                else:
-                    print(f"✅ pygame播放完成")
-            return True
+                if block:
+                    max_wait = 30  # 最多等待30秒
+                    waited = 0
+                    last_check = 0
+                    
+                    while pygame.mixer.music.get_busy() and waited < max_wait:
+                        pygame.time.Clock().tick(10)
+                        waited += 0.1
+                        
+                        # 每2秒打印一次状态
+                        if waited - last_check >= 2.0:
+                            print(f"📊 pygame播放中，已播放: {waited:.1f}s")
+                            last_check = waited
+                    
+                    if waited >= max_wait:
+                        print(f"⏰ pygame播放超时，强制停止")
+                        pygame.mixer.music.stop()
+                    else:
+                        print(f"✅ pygame播放完成")
+                
+                return True
+            else:
+                print(f"❌ pygame播放未能正常启动")
+                raise Exception("pygame播放器未能正常启动")
+                
         except (ImportError, Exception) as e:
             print(f"❌ pygame音频播放失败: {e}")
             pass
@@ -170,11 +292,54 @@ class AudioPlayer:
             print(f"❌ PowerShell音频播放失败: {e}")
             pass
         
-        # 方法4: 最后的尝试 - 使用默认程序打开
+        # 方法4: 使用Windows系统命令直接播放
         try:
+            print(f"🔊 尝试Windows start命令播放: {audio_file}")
+            
+            # 使用Windows start命令用默认程序播放
+            if block:
+                # 同步模式：等待播放器关闭
+                result = subprocess.run(['start', '/wait', '""', f'"{audio_file}"'], 
+                                      shell=True, capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"✅ Windows start命令播放成功")
+                    return True
+                else:
+                    print(f"⚠️ start命令返回码: {result.returncode}")
+            else:
+                # 异步模式：立即返回
+                subprocess.Popen(['start', '""', f'"{audio_file}"'], shell=True)
+                print(f"✅ Windows start命令启动成功")
+                return True
+        except Exception as e:
+            print(f"❌ Windows start命令失败: {e}")
+        
+        # 方法5: 使用mplay32.exe
+        try:
+            print(f"🔊 尝试mplay32播放: {audio_file}")
+            
+            result = subprocess.run(['mplay32', '/play', '/close', audio_file], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                print(f"✅ mplay32播放成功")
+                return True
+            else:
+                print(f"❌ mplay32播放失败: {result.stderr}")
+        except Exception as e:
+            print(f"❌ mplay32播放失败: {e}")
+        
+        # 方法6: 最后的尝试 - 使用os.startfile
+        try:
+            print(f"🔊 使用os.startfile打开: {audio_file}")
             os.startfile(audio_file)
+            print(f"✅ os.startfile打开成功")
+            if block:
+                # 简单等待几秒，让音频播放
+                print(f"⏳ 等待音频播放...") 
+                time.sleep(5)  # 简单等待
             return True
-        except:
+        except Exception as e:
+            print(f"❌ os.startfile打开失败: {e}")
             return False
     
     @staticmethod
@@ -206,7 +371,7 @@ class AudioPlayer:
                 else:
                     subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 return True
-            except:
+            except Exception:
                 continue
         
         return False
