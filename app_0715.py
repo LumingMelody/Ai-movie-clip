@@ -3009,7 +3009,8 @@ async def start_socket_server(
             port=req.port,
             reply_probability=req.reply_probability,
             max_queue_size=req.max_queue_size,
-            use_voice_cloning=req.use_voice_cloning  # 🔥 新增：传递声音克隆配置
+            use_voice_cloning=req.use_voice_cloning,  # 🔥 新增：传递声音克隆配置
+            reply_interval=20  # 🔥 新增：设置回复间隔20秒
         )
 
         # 设置降级策略参数

@@ -213,7 +213,8 @@ config_manager = ConfigManager()
 class WebSocketClient:
     """WebSocket客户端 - 用于连接虚拟机上的WebSocket服务器并处理消息"""
 
-    def __init__(self, host='10.211.55.3', port=8888, reply_probability=0.3, max_queue_size=5, use_voice_cloning=False):
+    def __init__(self, host='10.211.55.3', port=8888, reply_probability=0.3, max_queue_size=5, use_voice_cloning=False, 
+                 reply_interval=15):
         self.host = host
         self.port = port
         self.uri = f"ws://{host}:{port}"
@@ -229,8 +230,12 @@ class WebSocketClient:
         self.min_queue_for_reply = 1  # 至少有1条消息才考虑回复
         self.use_voice_cloning = use_voice_cloning  # 🔥 新增：控制是否使用声音克隆
         self.cached_voice_id = None  # 🔥 缓存voice_id，避免重复克隆
+        
+        # 回复时间间隔控制
+        self.reply_interval = reply_interval  # 两次回复之间的最小间隔（秒）
+        self.last_reply_time = 0  # 上次回复的时间戳
 
-        print(f"🎯 随机回复设置: 回复概率={reply_probability * 100:.1f}%, 最大队列长度={max_queue_size}")
+        print(f"🎯 随机回复设置: 回复概率={reply_probability * 100:.1f}%, 最大队列长度={max_queue_size}, 回复间隔={reply_interval}秒")
         if self.use_voice_cloning:
             print(f"🎤 已启用声音克隆模式（使用本地xiao_zong.m4a）")
             
@@ -452,6 +457,15 @@ class WebSocketClient:
 
             # 随机决定是否回复
             if len(self.message_queue) >= self.min_queue_for_reply:
+                current_time = time.time()
+                time_since_last_reply = current_time - self.last_reply_time
+                
+                # 检查时间间隔
+                if time_since_last_reply < self.reply_interval:
+                    remaining_time = self.reply_interval - time_since_last_reply
+                    print(f"⏰ 回复间隔未达到，还需等待 {remaining_time:.1f} 秒")
+                    return
+                
                 # 生成随机数判断是否回复
                 should_reply = random.random() < self.reply_probability
 
@@ -463,6 +477,9 @@ class WebSocketClient:
 
                     # 回复选中的消息
                     await self._generate_and_send_reply(selected_message)
+                    
+                    # 更新最后回复时间
+                    self.last_reply_time = current_time
 
                     # 清空消息队列
                     self.message_queue.clear()
@@ -1388,8 +1405,9 @@ if __name__ == "__main__":
     client = WebSocketClient(
         host='10.211.55.3',
         port=8888,
-        reply_probability=0.3,  # 随机回复概率
-        max_queue_size=5  # 最大消息队列长度
+        reply_probability=0.2,  # 随机回复概率降低到20%
+        max_queue_size=8,       # 增加队列长度
+        reply_interval=20       # 回复间隔20秒
     )
 
 
