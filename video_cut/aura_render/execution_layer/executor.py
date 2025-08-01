@@ -411,22 +411,48 @@ class AuraExecutor:
                 return local_path
                 
             elif source.startswith('http'):
+                # 检查是否是视频截图接口
+                if 'vframe/jpg' in source or 'vframe/png' in source:
+                    print(f"⚠️ 检测到视频截图接口，尝试转换为视频URL...")
+                    # 尝试移除vframe参数获取原始视频
+                    video_url = source.split('?')[0]  # 移除查询参数
+                    print(f"🎬 尝试使用原始视频URL: {video_url}")
+                    source = video_url  # 更新source为视频URL
+                
                 # 下载网络文件
-                print(f"📥 下载网络文件...")
+                print(f"📥 下载网络文件: {source}")
                 filename = os.path.basename(source.split('?')[0])  # 处理URL参数
-                if not filename:
+                if not filename or '.' not in filename:
+                    # 如果没有文件名或没有扩展名，默认使用mp4
                     filename = f"downloaded_{int(datetime.now().timestamp())}.mp4"
+                elif not any(filename.lower().endswith(ext) for ext in ['.mp4', '.avi', '.mov', '.mkv', '.flv']):
+                    # 如果不是视频扩展名，添加mp4
+                    filename += '.mp4'
+                    
                 local_path = os.path.join(self.temp_dir, filename)
                 
                 # 导入下载函数
                 from core.utils.file_utils import download_file_with_retry
-                success = download_file_with_retry(source, local_path, verbose=False)
+                success = download_file_with_retry(source, local_path, verbose=True)
                 
                 if success and os.path.exists(local_path):
+                    # 检查下载的文件大小
+                    file_size = os.path.getsize(local_path)
+                    print(f"📁 下载成功，文件大小: {file_size} 字节")
+                    
+                    if file_size < 1024:  # 小于1KB可能是错误文件
+                        print(f"⚠️ 下载的文件太小，可能不是有效视频")
+                        try:
+                            with open(local_path, 'r') as f:
+                                content = f.read()
+                            print(f"📄 文件内容预览: {content[:200]}...")
+                        except:
+                            pass
+                    
                     self.resources_cache[source] = local_path
                     return local_path
                 else:
-                    print(f"❌ 网络文件下载失败")
+                    print(f"❌ 网络文件下载失败: {source}")
                     return None
                 
             elif os.path.exists(source):

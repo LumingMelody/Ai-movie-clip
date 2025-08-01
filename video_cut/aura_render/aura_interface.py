@@ -56,15 +56,22 @@ class AuraRenderInterface:
         try:
             # 处理输入视频资源
             if request.get('video_url'):
+                video_url = request['video_url']
+                print(f"🎬 处理视频URL: {video_url}")
+                
+                # 检查是否是视频截图接口
+                if 'vframe/jpg' in video_url or 'vframe/png' in video_url:
+                    print(f"⚠️ 检测到视频截图接口，将在执行层处理URL转换")
+                
                 request['resources'] = request.get('resources', {})
                 request['resources']['videos'] = request['resources'].get('videos', [])
                 request['resources']['videos'].append({
                     'id': 'input_video',
-                    'source': request['video_url']
+                    'source': video_url
                 })
             
             # 1. 智能编排 - 生成执行脚本
-            print("开始智能编排...")
+            print(f"🤖 开始智能编排...请求参数: {len(request)}个")
             script = self.orchestrator.orchestrate(request)
             
             # 保存脚本供调试
@@ -76,12 +83,22 @@ class AuraRenderInterface:
             script = self._process_ai_resources(script)
             
             # 3. 机械执行 - 根据脚本生成视频
-            print("开始执行视频渲染...")
+            print(f"⚙️ 开始执行视频渲染...资源数量: {len(script.get('resources', {}).get('videos', []))}个视频")
             output_path = request.get('output_path') or self._generate_output_path()
             video_path = self.executor.execute(script, output_path)
             
             # 4. 上传到OSS（如果需要）
             video_url = self._upload_to_oss(video_path) if request.get('upload_oss', True) else video_path
+            
+            print(f"✅ AuraRender处理完成！")
+            print(f"🎬 输出视频: {video_path}")
+            
+            # 检查输出文件
+            if os.path.exists(video_path):
+                file_size = os.path.getsize(video_path)
+                print(f"📁 文件大小: {file_size / (1024*1024):.2f}MB")
+            else:
+                print(f"⚠️ 输出文件不存在！")
             
             return {
                 'status': 'success',
@@ -92,16 +109,25 @@ class AuraRenderInterface:
                     'script_path': script_path,
                     'video_type': script['project']['type'],
                     'style': script['project']['style'],
-                    'duration': script['project']['duration']
+                    'duration': script['project']['duration'],
+                    'file_size_mb': os.path.getsize(video_path) / (1024*1024) if os.path.exists(video_path) else 0
                 }
             }
             
         except Exception as e:
+            print(f"❌ AuraRender处理失败: {e}")
+            print(f"🔍 错误类型: {type(e).__name__}")
+            import traceback
+            print(f"📝 详细错误信息:")
+            traceback.print_exc()
             return {
                 'status': 'error',
                 'error': str(e),
                 'metadata': {
-                    'created_at': datetime.now().isoformat()
+                    'created_at': datetime.now().isoformat(),
+                    'error_type': type(e).__name__,
+                    'video_url': request.get('video_url', ''),
+                    'timestamp': datetime.now().isoformat()
                 }
             }
     
