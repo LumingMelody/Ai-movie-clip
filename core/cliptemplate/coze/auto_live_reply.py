@@ -14,13 +14,91 @@ import asyncio
 import websockets
 from typing import Dict, Any
 
+# ================== 常量配置 ==================
+class Constants:
+    """系统常量配置类"""
+    
+    # API配置
+    DEFAULT_API_KEY = 'sk-a48a1d84e015410292d07021f60b9acb'
+    QWEN_MODEL = "qwen-max"
+    COSYVOICE_MODEL = "cosyvoice-v2"
+    COSYVOICE_V1_MODEL = "cosyvoice-v1"
+    
+    # 文件和目录
+    CONFIG_DIR = "live_config/"
+    PRODUCT_CONFIG_FILE = "product_config.json"
+    VOICE_CONFIG_FILE = "voice_config.json"
+    VOICE_ID_FILE = "xiaozong_voice_id.txt"
+    VOICE_FILE_NAME = "xiao_zong.m4a"
+    
+    # 网络配置
+    DEFAULT_HOST = '0.0.0.0'
+    DEFAULT_PORT = 8888
+    WEBSOCKET_PING_INTERVAL = 30
+    WEBSOCKET_PING_TIMEOUT = 20
+    WEBSOCKET_CLOSE_TIMEOUT = 60
+    
+    # 回复策略
+    DEFAULT_REPLY_PROBABILITY = 0.3
+    DEFAULT_MAX_QUEUE_SIZE = 5
+    DEFAULT_REPLY_INTERVAL = 15
+    MIN_QUEUE_FOR_REPLY = 1
+    
+    # 自动介绍
+    NO_MESSAGE_TIMEOUT = 90
+    AUTO_INTRODUCE_INTERVAL = 120
+    ESTIMATED_WORDS_PER_SECOND = 2.5
+    MAX_REPLY_LENGTH = 25
+    TARGET_DURATION_SECONDS = 10
+    
+    # 重连配置
+    MAX_RECONNECT_ATTEMPTS = 10
+    RECONNECT_DELAY = 5
+    
+    # OSS配置
+    OSS_ENDPOINT = 'https://oss-cn-hangzhou.aliyuncs.com'
+    OSS_BUCKET_NAME = 'lan8-e-business'
+    OSS_VOICE_PREFIX = 'voice_cloning/xiao_zong_'
+    VOICE_CLONE_PREFIX = "xiaozong"
+    
+    # 语音选项
+    VOICE_OPTIONS = {
+        "female": "longanran",
+        "male": "longlaotie_v2", 
+        "default": "longxiaochun_v2"
+    }
+    
+    # 默认产品配置
+    DEFAULT_PRODUCT_CONFIG = {
+        "product_name": "智能健康手环",
+        "price": 199,
+        "features": "心率监测 睡眠分析 运动记录 防水设计",
+        "discount": "85折"
+    }
+    
+    # 默认语音配置
+    DEFAULT_VOICE_CONFIG = {
+        "model": "cosyvoice-v2",
+        "voice": "longxiaochun_v2",
+        "gender": "default",
+        "speed": 1.0,
+        "pitch": 1.0
+    }
+    
+    # 错误消息
+    ERROR_MESSAGES = {
+        "qwen_error": "抱歉，我现在无法回答这个问题，请稍后再试。",
+        "api_key_missing": "❌ 请先设置您的 DashScope API Key!",
+        "oss_dependency_missing": "⚠️ 缺少OSS依赖，请安装: pip install oss2"
+    }
+
 # 设置 DashScope API Key
-dashscope.api_key = os.getenv('DASHSCOPE_API_KEY', 'sk-a48a1d84e015410292d07021f60b9acb')
+dashscope.api_key = os.getenv('DASHSCOPE_API_KEY', Constants.DEFAULT_API_KEY)
 
 # 配置文件路径
-CONFIG_DIR = "live_config/"
-PRODUCT_CONFIG_FILE = os.path.join(CONFIG_DIR, "product_config.json")
-VOICE_CONFIG_FILE = os.path.join(CONFIG_DIR, "voice_config.json")
+CONFIG_DIR = Constants.CONFIG_DIR
+PRODUCT_CONFIG_FILE = os.path.join(CONFIG_DIR, Constants.PRODUCT_CONFIG_FILE)
+VOICE_CONFIG_FILE = os.path.join(CONFIG_DIR, Constants.VOICE_CONFIG_FILE)
 
 # 确保配置目录存在
 os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -33,23 +111,14 @@ class ConfigManager:
     def __init__(self):
         self.product_info = self.load_product_config()
         self.voice_config = self.load_voice_config()
-        self.voice_options = {
-            "female": "longanran",  # 女声
-            "male": "longlaotie_v2",  # 男声
-            "default": "longxiaochun_v2"  # 默认声音
-        }
+        self.voice_options = Constants.VOICE_OPTIONS
         print("✅ 配置管理器初始化完成")
         print(f"📦 产品配置: {self.product_info}")
         print(f"🎵 语音配置: {self.voice_config}")
 
     def load_product_config(self) -> Dict[str, Any]:
         """加载产品配置"""
-        default_config = {
-            "product_name": "智能健康手环",
-            "price": 199,
-            "features": "心率监测 睡眠分析 运动记录 防水设计",
-            "discount": "85折"
-        }
+        default_config = Constants.DEFAULT_PRODUCT_CONFIG
 
         try:
             if os.path.exists(PRODUCT_CONFIG_FILE):
@@ -67,13 +136,7 @@ class ConfigManager:
 
     def load_voice_config(self) -> Dict[str, Any]:
         """加载语音配置"""
-        default_config = {
-            "model": "cosyvoice-v2",
-            "voice": "longxiaochun_v2",
-            "gender": "default",
-            "speed": 1.0,
-            "pitch": 1.0
-        }
+        default_config = Constants.DEFAULT_VOICE_CONFIG
 
         try:
             if os.path.exists(VOICE_CONFIG_FILE):
@@ -161,12 +224,12 @@ class ConfigManager:
 
     def get_current_voice(self) -> str:
         """获取当前使用的语音"""
-        return self.voice_config.get("voice", "longxiaochun_v2")
+        return self.voice_config.get("voice", Constants.VOICE_OPTIONS["default"])
 
     def get_voice_params(self) -> Dict[str, Any]:
         """获取语音合成参数"""
         return {
-            "model": self.voice_config.get("model", "cosyvoice-v2"),
+            "model": self.voice_config.get("model", Constants.COSYVOICE_MODEL),
             "voice": self.get_current_voice(),
             "speed": self.voice_config.get("speed", 1.0),
             "pitch": self.voice_config.get("pitch", 1.0)
@@ -209,12 +272,251 @@ class ConfigManager:
 config_manager = ConfigManager()
 
 
+# ================== 语音生成服务 ==================
+class AudioService:
+    """统一的语音生成服务 - 支持普通合成和声音克隆"""
+    
+    def __init__(self, use_voice_cloning=False):
+        self.use_voice_cloning = use_voice_cloning
+        self.cached_voice_id = None
+        
+        if self.use_voice_cloning:
+            print(f"🎤 AudioService: 已启用声音克隆模式（使用本地xiao_zong.m4a）")
+            self._load_cached_voice_id()
+    
+    def _load_cached_voice_id(self):
+        """加载缓存的voice_id"""
+        try:
+            voice_id_file = os.path.join(CONFIG_DIR, "xiaozong_voice_id.txt")
+            if os.path.exists(voice_id_file):
+                with open(voice_id_file, 'r') as f:
+                    self.cached_voice_id = f.read().strip()
+                print(f"📂 AudioService: 已加载保存的voice_id: {self.cached_voice_id}")
+        except Exception as load_error:
+            print(f"⚠️ AudioService: 加载voice_id失败: {load_error}")
+    
+    def _find_local_voice_file(self):
+        """查找本地语音文件"""
+        possible_paths = [
+            "xiao_zong.m4a",  # 当前目录
+            os.path.join(os.path.dirname(__file__), "xiao_zong.m4a"),  # 同目录
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "xiao_zong.m4a"),  # 项目根目录
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+        return None
+    
+    def _create_voice_clone(self, local_voice_path):
+        """创建声音克隆"""
+        from dashscope.audio.tts_v2 import VoiceEnrollmentService
+        import oss2
+        import uuid
+        
+        # OSS配置
+        access_key_id = os.getenv('OSS_ACCESS_KEY_ID', '')
+        access_key_secret = os.getenv('OSS_ACCESS_KEY_SECRET', '')
+        endpoint = 'https://oss-cn-hangzhou.aliyuncs.com'
+        bucket_name = 'lan8-e-business'
+        
+        print("🎯 第一步：上传参考音频到OSS...")
+        
+        # 创建OSS客户端
+        auth = oss2.Auth(access_key_id, access_key_secret)
+        bucket = oss2.Bucket(auth, endpoint, bucket_name)
+        
+        # 生成唯一的对象名
+        object_name = f"voice_cloning/xiao_zong_{uuid.uuid4()}.m4a"
+        
+        # 上传本地音频文件到OSS
+        result = bucket.put_object_from_file(object_name, local_voice_path)
+        
+        if result.status != 200:
+            raise Exception(f"OSS上传失败，状态码: {result.status}")
+        
+        reference_url = f"https://{bucket_name}.{endpoint.replace('https://', '')}/{object_name}"
+        print(f"✅ OSS上传成功: {reference_url}")
+        
+        print("🎯 第二步：创建声音克隆...")
+        
+        # 创建语音注册服务实例
+        service = VoiceEnrollmentService()
+        
+        # 调用create_voice方法复刻声音
+        voice_id = service.create_voice(
+            target_model="cosyvoice-v1",
+            prefix="xiaozong",
+            url=reference_url
+        )
+        
+        print(f"✅ 声音克隆创建成功，voice_id: {voice_id}")
+        
+        # 缓存voice_id
+        self.cached_voice_id = voice_id
+        
+        # 保存voice_id到文件
+        try:
+            voice_id_file = os.path.join(CONFIG_DIR, "xiaozong_voice_id.txt")
+            with open(voice_id_file, 'w') as f:
+                f.write(voice_id)
+            print(f"📝 已保存voice_id到文件: {voice_id_file}")
+        except Exception as save_error:
+            print(f"⚠️ 保存voice_id失败: {save_error}")
+        
+        return voice_id
+    
+    def _generate_cloned_audio(self, text, voice_id):
+        """使用克隆音色生成语音"""
+        print("🎯 使用克隆音色合成语音...")
+        
+        synthesizer = SpeechSynthesizer(
+            model="cosyvoice-v1",
+            voice=voice_id
+        )
+        
+        audio_data = synthesizer.call(text)
+        audio_filename = f"audio_response_cloned_{int(time.time())}_{random.randint(1000, 9999)}.mp3"
+        
+        with open(audio_filename, 'wb') as f:
+            f.write(audio_data)
+        
+        print(f"🎉 OSS声音克隆合成成功: {audio_filename}")
+        return audio_filename
+    
+    def _generate_normal_audio(self, text):
+        """使用普通配置生成语音"""
+        voice_params = config_manager.get_voice_params()
+        print(f"🎵 使用普通语音配置: {voice_params}")
+        
+        synthesizer = SpeechSynthesizer(
+            model=voice_params["model"],
+            voice=voice_params["voice"]
+        )
+        
+        audio_data = synthesizer.call(text)
+        audio_filename = f"audio_response_{int(time.time())}_{random.randint(1000, 9999)}.mp3"
+        
+        with open(audio_filename, 'wb') as f:
+            f.write(audio_data)
+        
+        print(f"✅ 普通语音合成成功: {audio_filename} (语音: {voice_params['voice']})")
+        return audio_filename
+    
+    def generate_audio(self, text):
+        """生成语音音频，根据配置决定是否使用声音克隆"""
+        try:
+            # 检查是否启用声音克隆
+            if self.use_voice_cloning:
+                local_voice_path = self._find_local_voice_file()
+                
+                print(f"🔍 声音克隆检查: use_voice_cloning={self.use_voice_cloning}, 找到文件={local_voice_path is not None}")
+                if local_voice_path:
+                    print(f"📍 音频文件路径: {os.path.abspath(local_voice_path)}")
+                
+                if local_voice_path:
+                    print(f"🎤 检测到本地语音文件: {local_voice_path}，使用OSS声音克隆模式")
+                    
+                    try:
+                        # 检查是否有缓存的voice_id
+                        if self.cached_voice_id:
+                            print(f"🎯 使用缓存的voice_id: {self.cached_voice_id}")
+                            voice_id = self.cached_voice_id
+                        else:
+                            # 首次使用，需要创建声音克隆
+                            voice_id = self._create_voice_clone(local_voice_path)
+                        
+                        return self._generate_cloned_audio(text, voice_id)
+                        
+                    except ImportError as ie:
+                        print(f"⚠️ 缺少OSS依赖: {str(ie)}，请安装: pip install oss2")
+                    except Exception as clone_error:
+                        print(f"⚠️ OSS声音克隆失败: {str(clone_error)}，回退到普通合成")
+            
+            # 普通语音合成模式
+            return self._generate_normal_audio(text)
+            
+        except Exception as e:
+            print(f"❌ 语音合成错误: {e}")
+            return None
+
+
+# 创建全局音频服务实例
+audio_service = AudioService()
+
+
+# ================== AI生成服务 ==================
+class AIService:
+    """统一的AI服务 - 处理文本生成和提示词构建"""
+    
+    @staticmethod
+    def build_prompt(message: str) -> str:
+        """构建提示词，使用最新的产品配置，生成简短回复"""
+        current_product = config_manager.product_info
+        features_str = ', '.join(current_product['features']) if isinstance(current_product['features'], list) else current_product['features']
+        
+        return (
+            f"你是一个销售代理，推广产品：{current_product['product_name']}，"
+            f"价格：{current_product['price']}元，特点：{features_str}，"
+            f"当前折扣：{current_product['discount']}。"
+            f"请用简短自然的语言回答客户的问题：{message}。"
+            f"要求：回复必须控制在{Constants.MAX_REPLY_LENGTH}字以内，语言要亲切自然，适合语音播放，时长约{Constants.TARGET_DURATION_SECONDS}秒。"
+        )
+    
+    @staticmethod
+    def generate_with_qwen(prompt: str) -> str:
+        """调用Qwen生成回复"""
+        try:
+            response = Generation.call(
+                model=Constants.QWEN_MODEL,
+                prompt=prompt,
+                result_format='message'
+            )
+            if response.status_code == 200:
+                return response.output.choices[0].message.content
+            else:
+                return Constants.ERROR_MESSAGES["qwen_error"]
+        except Exception as e:
+            print(f"❌ Qwen生成错误: {e}")
+            return Constants.ERROR_MESSAGES["qwen_error"]
+    
+    @staticmethod
+    def get_priority_replies() -> Dict[str, str]:
+        """获取优先回复模板"""
+        return {
+            "价格": "我们的{product_name}当前优惠价是{price}元，比原价便宜了{discount}。",
+            "功能": "这款{product_name}具有{features}等功能。",
+            "优惠": "现在购买可以享受{discount}优惠，这是本月特别活动。",
+            "质量": "我们提供一年质保，所有产品都通过严格的质量检测。"
+        }
+    
+    @staticmethod
+    def process_message(message: str) -> str:
+        """根据内容决定优先回复还是调用Qwen"""
+        current_product = config_manager.product_info
+        priority_replies = AIService.get_priority_replies()
+        
+        for key in priority_replies:
+            if key in message:
+                # 处理features列表的显示
+                formatted_info = current_product.copy()
+                if isinstance(formatted_info['features'], list):
+                    formatted_info['features'] = '、'.join(formatted_info['features'])
+                return priority_replies[key].format(**formatted_info)
+        
+        return AIService.generate_with_qwen(AIService.build_prompt(message))
+
+# 创建全局AI服务实例
+ai_service = AIService()
+
+
 # ================== WebSocket 客户端 ==================
 class WebSocketClient:
     """WebSocket客户端 - 用于连接虚拟机上的WebSocket服务器并处理消息"""
 
-    def __init__(self, host='10.211.55.3', port=8888, reply_probability=0.3, max_queue_size=5, use_voice_cloning=False, 
-                 reply_interval=15):
+    def __init__(self, host='10.211.55.3', port=Constants.DEFAULT_PORT, reply_probability=Constants.DEFAULT_REPLY_PROBABILITY, 
+                 max_queue_size=Constants.DEFAULT_MAX_QUEUE_SIZE, use_voice_cloning=False, 
+                 reply_interval=Constants.DEFAULT_REPLY_INTERVAL):
         self.host = host
         self.port = port
         self.uri = f"ws://{host}:{port}"
@@ -227,7 +529,7 @@ class WebSocketClient:
         self.message_queue = []
         self.max_queue_size = max_queue_size  # 最大消息队列长度
         self.reply_probability = reply_probability  # 回复概率
-        self.min_queue_for_reply = 1  # 至少有1条消息才考虑回复
+        self.min_queue_for_reply = Constants.MIN_QUEUE_FOR_REPLY  # 至少有1条消息才考虑回复
         self.use_voice_cloning = use_voice_cloning  # 🔥 新增：控制是否使用声音克隆
         self.cached_voice_id = None  # 🔥 缓存voice_id，避免重复克隆
         
@@ -249,13 +551,8 @@ class WebSocketClient:
             except Exception as load_error:
                 print(f"⚠️ 加载voice_id失败: {load_error}")
 
-        # 优先回复模板
-        self.priority_replies = {
-            "价格": "我们的{product_name}当前优惠价是{price}元，比原价便宜了{discount}。",
-            "功能": "这款{product_name}具有{features}等功能。",
-            "优惠": "现在购买可以享受{discount}优惠，这是本月特别活动。",
-            "质量": "我们提供一年质保，所有产品都通过严格的质量检测。"
-        }
+        # 优先回复模板（由AIService统一管理）
+        self.priority_replies = ai_service.get_priority_replies()
 
         # 降级方案设置
         self.last_message_time = time.time()  # 上次收到消息的时间
@@ -408,6 +705,65 @@ class WebSocketClient:
             try:
                 data = json.loads(message)
                 msg_type = data.get('Type')
+
+                # 处理Type为3的进入直播间消息
+                if msg_type == 3:
+                    # 解析Data字段中的JSON
+                    data_str = data.get('Data', '{}')
+                    try:
+                        data_content = json.loads(data_str)
+                        user_info = data_content.get('User', {})
+                        nickname = user_info.get('Nickname', '用户')
+                        
+                        print(f"👋 用户进入直播间: {nickname}")
+                        
+                        # 随机决定是否欢迎（30%概率）
+                        if random.random() < 0.3:
+                            welcome_messages = [
+                                f"欢迎{nickname}来到直播间！今天有特别优惠哦",
+                                f"欢迎{nickname}！正好赶上我们的活动",
+                                f"欢迎{nickname}进入直播间，有什么想了解的可以问我",
+                                f"{nickname}你好！欢迎来看我们的产品介绍",
+                                f"欢迎新朋友{nickname}！今天有惊喜价格"
+                            ]
+                            
+                            welcome_text = random.choice(welcome_messages)
+                            print(f"🎉 发送欢迎语: {welcome_text}")
+                            
+                            # 生成语音
+                            audio_file = self.generate_audio(welcome_text)
+                            
+                            # 播放语音
+                            if audio_file and os.path.exists(audio_file):
+                                print(f"🎵 正在播放欢迎语音：{audio_file}")
+                                try:
+                                    play_audio_async(audio_file, delete_after=True)
+                                    print("✅ 欢迎语音播放任务已启动")
+                                except Exception as e:
+                                    print(f"❌ 播放欢迎语音失败: {e}")
+                                    try:
+                                        os.remove(audio_file)
+                                    except:
+                                        pass
+                            
+                            # 构建欢迎消息
+                            welcome_message = {
+                                "type": "welcome_message",
+                                "user": nickname,
+                                "message": welcome_text,
+                                "voice_used": config_manager.get_current_voice(),
+                                "timestamp": time.time()
+                            }
+                            
+                            # 发送欢迎消息到WebSocket服务器
+                            await self.send_message(json.dumps(welcome_message, ensure_ascii=False))
+                        else:
+                            print(f"🤐 跳过欢迎语（随机选择）")
+                        
+                    except json.JSONDecodeError:
+                        print(f"⚠️ 无法解析Type=3的Data字段: {data_str}")
+                    
+                    return
 
                 # 只处理Type为1的消息
                 if msg_type != 1:
@@ -713,184 +1069,20 @@ class WebSocketClient:
             print(f"❌ 清理临时音频文件时出错: {e}")
 
     def process_message(self, message):
-        """根据内容决定优先回复还是调用Qwen"""
-        # 使用最新的产品配置
-        current_product = config_manager.product_info
-
-        for key in self.priority_replies:
-            if key in message:
-                # 处理features列表的显示
-                formatted_info = current_product.copy()
-                if isinstance(formatted_info['features'], list):
-                    formatted_info['features'] = '、'.join(formatted_info['features'])
-                return self.priority_replies[key].format(**formatted_info)
-
-        return self.generate_with_qwen(self.build_prompt(message))
+        """根据内容决定优先回复还是调用Qwen，委托给AIService处理"""
+        return ai_service.process_message(message)
 
     def build_prompt(self, message):
-        """构建提示词，使用最新的产品配置，生成简短回复（10秒左右）"""
-        current_product = config_manager.product_info
-        features_str = ', '.join(current_product['features']) if isinstance(current_product['features'], list) else \
-        current_product['features']
-
-        return (
-            f"你是一个销售代理，推广产品：{current_product['product_name']}，"
-            f"价格：{current_product['price']}元，特点：{features_str}，"
-            f"当前折扣：{current_product['discount']}。"
-            f"请用简短自然的语言回答客户的问题：{message}。"
-            f"要求：回复必须控制在25字以内，语言要亲切自然，适合语音播放，时长约10秒。"
-        )
+        """构建提示词，委托给AIService处理"""
+        return ai_service.build_prompt(message)
 
     def generate_with_qwen(self, prompt):
-        """调用Qwen生成回复"""
-        try:
-            response = Generation.call(
-                model="qwen-max",
-                prompt=prompt,
-                result_format='message'
-            )
-            if response.status_code == 200:
-                return response.output.choices[0].message.content
-            else:
-                return "抱歉，我现在无法回答这个问题，请稍后再试。"
-        except Exception as e:
-            print(f"❌ Qwen生成错误: {e}")
-            return "抱歉，我现在无法回答这个问题，请稍后再试。"
+        """调用Qwen生成回复，委托给AIService处理"""
+        return ai_service.generate_with_qwen(prompt)
 
     def generate_audio(self, text):
-        """生成语音音频，根据配置决定是否使用声音克隆"""
-        try:
-            # 🔥 检查是否启用了声音克隆且存在本地xiao_zong.m4a文件
-            # 支持多个可能的路径
-            possible_paths = [
-                "xiao_zong.m4a",  # 当前目录
-                os.path.join(os.path.dirname(__file__), "xiao_zong.m4a"),  # 同目录
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "xiao_zong.m4a"),  # 项目根目录
-            ]
-            
-            local_voice_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    local_voice_path = path
-                    break
-            
-            print(f"🔍 声音克隆检查: use_voice_cloning={self.use_voice_cloning}, 找到文件={local_voice_path is not None}")
-            if local_voice_path:
-                print(f"📍 音频文件路径: {os.path.abspath(local_voice_path)}")
-            
-            if self.use_voice_cloning and local_voice_path:
-                print(f"🎤 检测到本地语音文件: {local_voice_path}，使用OSS声音克隆模式")
-                
-                # 使用OSS声音克隆合成
-                try:
-                    # 导入必要的模块
-                    from dashscope.audio.tts_v2 import VoiceEnrollmentService
-                    import oss2
-                    import uuid
-                    
-                    # 🔥 检查是否有缓存的voice_id
-                    if self.cached_voice_id:
-                        print(f"🎯 使用缓存的voice_id: {self.cached_voice_id}")
-                        voice_id = self.cached_voice_id
-                    else:
-                        # 🔥 首次使用，需要创建声音克隆
-                        # OSS配置
-                        access_key_id = os.getenv('OSS_ACCESS_KEY_ID', '')
-                        access_key_secret = os.getenv('OSS_ACCESS_KEY_SECRET', '')
-                        endpoint = 'https://oss-cn-hangzhou.aliyuncs.com'
-                        bucket_name = 'lan8-e-business'
-                        
-                        print("🎯 第一步：上传参考音频到OSS...")
-                        
-                        # 创建OSS客户端
-                        auth = oss2.Auth(access_key_id, access_key_secret)
-                        bucket = oss2.Bucket(auth, endpoint, bucket_name)
-                        
-                        # 生成唯一的对象名
-                        object_name = f"voice_cloning/xiao_zong_{uuid.uuid4()}.m4a"
-                        
-                        # 上传本地音频文件到OSS
-                        result = bucket.put_object_from_file(object_name, local_voice_path)
-                        
-                        if result.status == 200:
-                            reference_url = f"https://{bucket_name}.{endpoint.replace('https://', '')}/{object_name}"
-                            print(f"✅ OSS上传成功: {reference_url}")
-                        else:
-                            raise Exception(f"OSS上传失败，状态码: {result.status}")
-                        
-                        print("🎯 第二步：创建声音克隆...")
-                        
-                        # 创建语音注册服务实例
-                        service = VoiceEnrollmentService()
-                        
-                        # 调用create_voice方法复刻声音
-                        voice_id = service.create_voice(
-                            target_model="cosyvoice-v1",
-                            prefix="xiaozong",  # 🔥 修复：只使用英文字母和数字
-                            url=reference_url
-                        )
-                        
-                        print(f"✅ 声音克隆创建成功，voice_id: {voice_id}")
-                        
-                        # 🔥 缓存voice_id供后续使用
-                        self.cached_voice_id = voice_id
-                        print(f"💾 已缓存voice_id，后续合成将直接使用")
-                        
-                        # 🔥 保存voice_id到文件，实现持久化
-                        try:
-                            voice_id_file = os.path.join(CONFIG_DIR, "xiaozong_voice_id.txt")
-                            with open(voice_id_file, 'w') as f:
-                                f.write(voice_id)
-                            print(f"📝 已保存voice_id到文件: {voice_id_file}")
-                        except Exception as save_error:
-                            print(f"⚠️ 保存voice_id失败: {save_error}")
-                    
-                    print("🎯 使用克隆音色合成语音...")
-                    
-                    # 使用克隆的音色进行语音合成
-                    synthesizer = SpeechSynthesizer(
-                        model="cosyvoice-v1",
-                        voice=voice_id  # 使用克隆的voice_id
-                    )
-                    
-                    audio_data = synthesizer.call(text)
-                    
-                    audio_filename = f"audio_response_cloned_{int(time.time())}_{random.randint(1000, 9999)}.mp3"
-                    
-                    with open(audio_filename, 'wb') as f:
-                        f.write(audio_data)
-                    
-                    print(f"🎉 OSS声音克隆合成成功: {audio_filename}")
-                    return audio_filename
-                    
-                except ImportError as ie:
-                    print(f"⚠️ 缺少OSS依赖: {str(ie)}，请安装: pip install oss2")
-                    # 继续执行普通合成逻辑
-                except Exception as clone_error:
-                    print(f"⚠️ OSS声音克隆失败: {str(clone_error)}，回退到普通合成")
-                    # 继续执行普通合成逻辑
-            
-            # 🔥 普通语音合成模式（原有逻辑）
-            voice_params = config_manager.get_voice_params()
-            print(f"🎵 使用普通语音配置: {voice_params}")
-
-            synthesizer = SpeechSynthesizer(
-                model=voice_params["model"],
-                voice=voice_params["voice"]
-            )
-
-            audio_data = synthesizer.call(text)
-            audio_filename = f"audio_response_{int(time.time())}_{random.randint(1000, 9999)}.mp3"
-
-            with open(audio_filename, 'wb') as f:
-                f.write(audio_data)
-
-            print(f"✅ 普通语音合成成功: {audio_filename} (语音: {voice_params['voice']})")
-            return audio_filename
-
-        except Exception as e:
-            print(f"❌ 语音合成错误: {e}")
-            return None
+        """生成语音音频，委托给AudioService处理"""
+        return audio_service.generate_audio(text)
 
 
 # ================== Socket 服务器 ==================
@@ -904,13 +1096,8 @@ class SocketServer:
         self.use_voice_cloning = use_voice_cloning  # 🔥 新增：控制是否使用声音克隆
         self.cached_voice_id = None  # 🔥 缓存voice_id，避免重复克隆
 
-        # 优先回复模板
-        self.priority_replies = {
-            "价格": "我们的{product_name}当前优惠价是{price}元，比原价便宜了{discount}。",
-            "功能": "这款{product_name}具有{features}等功能。",
-            "优惠": "现在购买可以享受{discount}优惠，这是本月特别活动。",
-            "质量": "我们提供一年质保，所有产品都通过严格的质量检测。"
-        }
+        # 优先回复模板（由AIService统一管理）
+        self.priority_replies = ai_service.get_priority_replies()
         
         if self.use_voice_cloning:
             print(f"🎤 [SocketServer] 已启用声音克隆模式（使用本地xiao_zong.m4a）")
@@ -1143,184 +1330,20 @@ class SocketServer:
             print(f"❌ 处理和回复消息时出错: {e}")
 
     def process_message(self, message):
-        """根据内容决定优先回复还是调用Qwen"""
-        # 使用最新的产品配置
-        current_product = config_manager.product_info
-
-        for key in self.priority_replies:
-            if key in message:
-                # 处理features列表的显示
-                formatted_info = current_product.copy()
-                if isinstance(formatted_info['features'], list):
-                    formatted_info['features'] = '、'.join(formatted_info['features'])
-                return self.priority_replies[key].format(**formatted_info)
-
-        return self.generate_with_qwen(self.build_prompt(message))
+        """根据内容决定优先回复还是调用Qwen，委托给AIService处理"""
+        return ai_service.process_message(message)
 
     def build_prompt(self, message):
-        """构建提示词，使用最新的产品配置，生成简短回复（10秒左右）"""
-        current_product = config_manager.product_info
-        features_str = ', '.join(current_product['features']) if isinstance(current_product['features'], list) else \
-            current_product['features']
-
-        return (
-            f"你是一个销售代理，推广产品：{current_product['product_name']}，"
-            f"价格：{current_product['price']}元，特点：{features_str}，"
-            f"当前折扣：{current_product['discount']}。"
-            f"请用简短自然的语言回答客户的问题：{message}。"
-            f"要求：回复必须控制在25字以内，语言要亲切自然，适合语音播放，时长约10秒。"
-        )
+        """构建提示词，委托给AIService处理"""
+        return ai_service.build_prompt(message)
 
     def generate_with_qwen(self, prompt):
-        """调用Qwen生成回复"""
-        try:
-            response = Generation.call(
-                model="qwen-max",
-                prompt=prompt,
-                result_format='message'
-            )
-            if response.status_code == 200:
-                return response.output.choices[0].message.content
-            else:
-                return "抱歉，我现在无法回答这个问题，请稍后再试。"
-        except Exception as e:
-            print(f"❌ Qwen生成错误: {e}")
-            return "抱歉，我现在无法回答这个问题，请稍后再试。"
+        """调用Qwen生成回复，委托给AIService处理"""
+        return ai_service.generate_with_qwen(prompt)
 
     def generate_audio(self, text):
-        """生成语音音频，根据配置决定是否使用声音克隆"""
-        try:
-            # 🔥 检查是否启用了声音克隆且存在本地xiao_zong.m4a文件
-            # 支持多个可能的路径
-            possible_paths = [
-                "xiao_zong.m4a",  # 当前目录
-                os.path.join(os.path.dirname(__file__), "xiao_zong.m4a"),  # 同目录
-                os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "xiao_zong.m4a"),  # 项目根目录
-            ]
-            
-            local_voice_path = None
-            for path in possible_paths:
-                if os.path.exists(path):
-                    local_voice_path = path
-                    break
-            
-            print(f"🔍 声音克隆检查: use_voice_cloning={self.use_voice_cloning}, 找到文件={local_voice_path is not None}")
-            if local_voice_path:
-                print(f"📍 音频文件路径: {os.path.abspath(local_voice_path)}")
-            
-            if self.use_voice_cloning and local_voice_path:
-                print(f"🎤 检测到本地语音文件: {local_voice_path}，使用OSS声音克隆模式")
-                
-                # 使用OSS声音克隆合成
-                try:
-                    # 导入必要的模块
-                    from dashscope.audio.tts_v2 import VoiceEnrollmentService
-                    import oss2
-                    import uuid
-                    
-                    # 🔥 检查是否有缓存的voice_id
-                    if self.cached_voice_id:
-                        print(f"🎯 使用缓存的voice_id: {self.cached_voice_id}")
-                        voice_id = self.cached_voice_id
-                    else:
-                        # 🔥 首次使用，需要创建声音克隆
-                        # OSS配置
-                        access_key_id = os.getenv('OSS_ACCESS_KEY_ID', '')
-                        access_key_secret = os.getenv('OSS_ACCESS_KEY_SECRET', '')
-                        endpoint = 'https://oss-cn-hangzhou.aliyuncs.com'
-                        bucket_name = 'lan8-e-business'
-                        
-                        print("🎯 第一步：上传参考音频到OSS...")
-                        
-                        # 创建OSS客户端
-                        auth = oss2.Auth(access_key_id, access_key_secret)
-                        bucket = oss2.Bucket(auth, endpoint, bucket_name)
-                        
-                        # 生成唯一的对象名
-                        object_name = f"voice_cloning/xiao_zong_{uuid.uuid4()}.m4a"
-                        
-                        # 上传本地音频文件到OSS
-                        result = bucket.put_object_from_file(object_name, local_voice_path)
-                        
-                        if result.status == 200:
-                            reference_url = f"https://{bucket_name}.{endpoint.replace('https://', '')}/{object_name}"
-                            print(f"✅ OSS上传成功: {reference_url}")
-                        else:
-                            raise Exception(f"OSS上传失败，状态码: {result.status}")
-                        
-                        print("🎯 第二步：创建声音克隆...")
-                        
-                        # 创建语音注册服务实例
-                        service = VoiceEnrollmentService()
-                        
-                        # 调用create_voice方法复刻声音
-                        voice_id = service.create_voice(
-                            target_model="cosyvoice-v1",
-                            prefix="xiaozong",  # 🔥 修复：只使用英文字母和数字
-                            url=reference_url
-                        )
-                        
-                        print(f"✅ 声音克隆创建成功，voice_id: {voice_id}")
-                        
-                        # 🔥 缓存voice_id供后续使用
-                        self.cached_voice_id = voice_id
-                        print(f"💾 已缓存voice_id，后续合成将直接使用")
-                        
-                        # 🔥 保存voice_id到文件，实现持久化
-                        try:
-                            voice_id_file = os.path.join(CONFIG_DIR, "xiaozong_voice_id.txt")
-                            with open(voice_id_file, 'w') as f:
-                                f.write(voice_id)
-                            print(f"📝 已保存voice_id到文件: {voice_id_file}")
-                        except Exception as save_error:
-                            print(f"⚠️ 保存voice_id失败: {save_error}")
-                    
-                    print("🎯 使用克隆音色合成语音...")
-                    
-                    # 使用克隆的音色进行语音合成
-                    synthesizer = SpeechSynthesizer(
-                        model="cosyvoice-v1",
-                        voice=voice_id  # 使用克隆的voice_id
-                    )
-                    
-                    audio_data = synthesizer.call(text)
-                    
-                    audio_filename = f"audio_response_cloned_{int(time.time())}_{random.randint(1000, 9999)}.mp3"
-                    
-                    with open(audio_filename, 'wb') as f:
-                        f.write(audio_data)
-                    
-                    print(f"🎉 OSS声音克隆合成成功: {audio_filename}")
-                    return audio_filename
-                    
-                except ImportError as ie:
-                    print(f"⚠️ 缺少OSS依赖: {str(ie)}，请安装: pip install oss2")
-                    # 继续执行普通合成逻辑
-                except Exception as clone_error:
-                    print(f"⚠️ OSS声音克隆失败: {str(clone_error)}，回退到普通合成")
-                    # 继续执行普通合成逻辑
-            
-            # 🔥 普通语音合成模式（原有逻辑）
-            voice_params = config_manager.get_voice_params()
-            print(f"🎵 使用普通语音配置: {voice_params}")
-
-            synthesizer = SpeechSynthesizer(
-                model=voice_params["model"],
-                voice=voice_params["voice"]
-            )
-
-            audio_data = synthesizer.call(text)
-            audio_filename = f"audio_response_{int(time.time())}_{random.randint(1000, 9999)}.mp3"
-
-            with open(audio_filename, 'wb') as f:
-                f.write(audio_data)
-
-            print(f"✅ 普通语音合成成功: {audio_filename} (语音: {voice_params['voice']})")
-            return audio_filename
-
-        except Exception as e:
-            print(f"❌ 语音合成错误: {e}")
-            return None
+        """生成语音音频，委托给AudioService处理"""
+        return audio_service.generate_audio(text)
 
     def stop(self):
         """停止服务器"""
@@ -1392,7 +1415,7 @@ class TestClient:
 if __name__ == "__main__":
     # 检查API Key是否设置
     if dashscope.api_key == "YOUR_API_KEY":
-        print("❌ 请先设置您的 DashScope API Key!")
+        print(Constants.ERROR_MESSAGES["api_key_missing"])
         print("获取方式：https://dashscope.console.aliyun.com/")
         exit(1)
 
@@ -1401,19 +1424,18 @@ if __name__ == "__main__":
     print(f"📦 产品配置文件: {PRODUCT_CONFIG_FILE}")
     print(f"🎵 语音配置文件: {VOICE_CONFIG_FILE}")
 
-    # 创建WebSocket客户端（可通过参数调整降级策略）
+    # 创建WebSocket客户端（使用常量配置）
     client = WebSocketClient(
         host='10.211.55.3',
-        port=8888,
+        port=Constants.DEFAULT_PORT,
         reply_probability=0.2,  # 随机回复概率降低到20%
-        max_queue_size=8,       # 增加队列长度
+        max_queue_size=8,       # 增加队列长度  
         reply_interval=20       # 回复间隔20秒
     )
 
-
-    # 可自定义降级策略参数（已设置合理默认值）
-    # client.no_message_timeout = 90       # 无消息超时时间（默认90秒）
-    # client.auto_introduce_interval = 120 # 自动介绍间隔（默认120秒）
+    # 可自定义降级策略参数（使用常量默认值）
+    # client.no_message_timeout = Constants.NO_MESSAGE_TIMEOUT
+    # client.auto_introduce_interval = Constants.AUTO_INTRODUCE_INTERVAL
 
     async def main():
         max_retries = 5

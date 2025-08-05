@@ -1,42 +1,38 @@
-# orchestrator/workflow_orchestrator.py - 完全修复音频问题版本
+# orchestrator/workflow_orchestrator.py - 重构版本
 # -*- coding: utf-8 -*-
 """
-完全修复音频问题的工作流程编排器
+视频剪辑工作流程编排器 - 重构版本
+功能：协调视频分析、AI策略生成和视频剪辑的完整流程
 """
 
 import json
 import os
-import sys
 import time
 from typing import Dict, Any, List, Optional
 
 from moviepy import VideoFileClip, concatenate_videoclips
 
 from core.ai.ai_model_caller import AIModelCaller
+from core.utils.config_manager import config, ErrorHandler, PathHelper
 
-# 修复导入路径问题
-current_dir = os.path.dirname(os.path.abspath(__file__))
-core_dir = os.path.dirname(current_dir)
-project_root = os.path.dirname(core_dir)
-
-for path in [project_root, core_dir]:
-    if path not in sys.path:
-        sys.path.insert(0, path)
+# 设置Python路径
+config.setup_python_path()
 
 print(f"当前工作目录: {os.getcwd()}")
-print(f"Core目录: {core_dir}")
-print(f"项目根目录: {project_root}")
+print(f"项目路径信息: {config.get_project_paths()}")
 
 
 class VideoEditingOrchestrator:
-    """完全修复音频问题的视频剪辑编排器"""
+    """视频剪辑工作流程编排器 - 重构版本"""
 
     def __init__(self, video_files: List[str], output_dir: str = None, analysis_results: List[Dict] = None):
         self.video_files = video_files
-        self.output_dir = output_dir or "output"
+        self.output_dir = output_dir or config.video_config['default_output_dir']
         self.analysis_results = analysis_results or []
         self.editing_strategies = []
         self.start_time = None
+        self.video_config = config.get_config('video')
+        self.output_config = config.get_config('output')
 
         # 导入转场和特效模块
         self._import_effects_modules()
@@ -46,69 +42,91 @@ class VideoEditingOrchestrator:
         try:
             from core.clipeffects.easy_clip_effects import vignette
             self.effects = {'vignette': vignette}
-            print("✅ 成功导入特效模块")
+            ErrorHandler.log_success("成功导入特效模块")
         except ImportError as e:
-            print(f"⚠️ 导入特效模块失败: {e}")
+            ErrorHandler.handle_import_error("特效模块", e, "使用基础功能")
             self.effects = {}
 
     def run_complete_workflow(self, user_options: Dict[str, Any] = None, api_key: str = None,
                               use_local_ai: bool = False, merge_videos: bool = True):
         """运行完整的剪辑工作流程"""
-
+        workflow_steps = [
+            ("视频识别与预处理", self._step1_video_identification),
+            ("内容分析与分类", self._step2_content_analysis_wrapper),
+            ("剪辑策略生成", lambda: self._step3_generate_editing_strategy(user_options, api_key, use_local_ai)),
+            ("执行剪辑操作", self._step4_execute_editing),
+            ("输出最终视频", lambda edited_clips: self._step5_output_final_video(edited_clips, merge_videos))
+        ]
+        
+        return self._execute_workflow_steps(workflow_steps)
+    
+    def _execute_workflow_steps(self, steps: List[tuple]) -> Dict[str, Any]:
+        """执行工作流程步骤"""
         self.start_time = time.time()
-        print("🚀 开始AI视频自动剪辑流程（完全修复版）...")
-
+        print("🚀 开始AI视频自动剪辑流程...")
+        
         try:
-            # 步骤1: 视频数量识别与预处理
-            processed_videos = self._step1_video_identification()
-
-            # 步骤2: 内容分析与分类
-            if not self.analysis_results:
-                print("\n🔍 没有提供分析结果，开始重新分析...")
-                self._step2_content_analysis()
-            else:
-                print(f"\n✅ 使用现有分析结果 ({len(self.analysis_results)} 个视频)")
-                self._print_existing_analysis()
-
-            # 步骤3: 剪辑策略生成
-            self._step3_generate_editing_strategy_debug(user_options, api_key, use_local_ai)
-
-            # 步骤4: 执行剪辑操作
-            edited_clips = self._step4_execute_editing_debug()
-
-            edited_clips = [clip for clip in edited_clips if clip is not None]
+            results = {}
+            
+            # 执行前4个步骤
+            for i, (step_name, step_func) in enumerate(steps[:-1]):
+                print(f"\n📋 步骤{i+1}: {step_name}")
+                if i == 0:
+                    results['processed_videos'] = step_func()
+                elif i == 1:
+                    step_func()  # 分析步骤
+                elif i == 2:
+                    step_func()  # 策略生成步骤
+                elif i == 3:
+                    results['edited_clips'] = step_func()
+            
+            # 验证剪辑结果
+            edited_clips = [clip for clip in results['edited_clips'] if clip is not None]
             if not edited_clips:
                 raise ValueError("所有剪辑内容均为None，无法生成视频")
-
-            # 步骤5: 输出最终视频（完全修复版）
-            final_result = self._step5_output_final_video_completely_fixed(edited_clips, merge_videos)
-
+            
+            # 执行最后步骤（输出）
+            final_step_name, final_step_func = steps[-1]
+            print(f"\n📋 步骤5: {final_step_name}")
+            final_result = final_step_func(edited_clips)
+            
             # 添加处理时间
             processing_time = time.time() - self.start_time
             final_result["processing_time"] = round(processing_time, 2)
-
+            
             return final_result
-
+            
         except Exception as e:
-            print(f"❌ 工作流程执行失败: {str(e)}")
-            import traceback
-            print(f"详细错误信息: {traceback.format_exc()}")
-            return {
-                "status": "failed",
-                "error": str(e),
-                "processing_time": time.time() - self.start_time if self.start_time else 0
-            }
+            return self._handle_workflow_error(e)
 
     def _step1_video_identification(self):
         """步骤1: 视频数量识别与预处理"""
-        print("\n📹 步骤1: 视频数量识别与预处理")
-
-        if len(self.video_files) == 1:
+        video_count = len(self.video_files)
+        if video_count == 1:
             print(f"  单个视频: {os.path.basename(self.video_files[0])}")
         else:
-            print(f"  多个视频: {len(self.video_files)}个文件")
-
+            print(f"  多个视频: {video_count}个文件")
         return self.video_files
+    
+    def _step2_content_analysis_wrapper(self):
+        """步骤2包装器: 内容分析与分类"""
+        if not self.analysis_results:
+            print("\n🔍 没有提供分析结果，开始重新分析...")
+            self._step2_content_analysis()
+        else:
+            print(f"\n✅ 使用现有分析结果 ({len(self.analysis_results)} 个视频)")
+            self._print_existing_analysis()
+    
+    def _handle_workflow_error(self, error: Exception) -> Dict[str, Any]:
+        """处理工作流程错误"""
+        ErrorHandler.handle_api_error("工作流程", error)
+        import traceback
+        print(f"详细错误信息: {traceback.format_exc()}")
+        return {
+            "status": "failed",
+            "error": str(error),
+            "processing_time": time.time() - self.start_time if self.start_time else 0
+        }
 
     def _print_existing_analysis(self):
         """打印现有分析结果的摘要"""
@@ -123,75 +141,85 @@ class VideoEditingOrchestrator:
 
     def _step2_content_analysis(self):
         """步骤2: 内容分析与分类判断"""
-        print("\n🔍 步骤2: 内容分析与分类判断")
-
-        analyzer = None
-        import_attempts = [
-            'analyzer.video_analyzer',
-            'core.analyzer.video_analyzer',
-            'video_analyzer',
-        ]
-
-        for import_path in import_attempts:
-            try:
-                print(f"    尝试导入: {import_path}")
-                if import_path == 'analyzer.video_analyzer':
-                    from analyzer.video_analyzer import VideoAnalyzer
-                    analyzer = VideoAnalyzer()
-                    print(f"    ✅ 成功导入: {import_path}")
-                    break
-                elif import_path == 'core.analyzer.video_analyzer':
-                    from core.analyzer.video_analyzer import VideoAnalyzer
-                    analyzer = VideoAnalyzer()
-                    print(f"    ✅ 成功导入: {import_path}")
-                    break
-                elif import_path == 'video_analyzer':
-                    import video_analyzer
-                    analyzer = video_analyzer.VideoAnalyzer()
-                    print(f"    ✅ 成功导入: {import_path}")
-                    break
-            except ImportError as e:
-                print(f"    ❌ 导入失败: {import_path} - {e}")
-                continue
-
-        if not analyzer:
-            raise ImportError("无法找到 VideoAnalyzer")
-
+        analyzer = self._import_video_analyzer()
+        
         for video_path in self.video_files:
             print(f"  分析视频: {os.path.basename(video_path)}")
-
             analysis_result = analyzer.analyze_video(video_path)
             self.analysis_results.append(analysis_result)
-
+            
             classification = analysis_result.get('classification', {})
             print(f"    内容类型: {classification.get('content_type', '未知')}")
+    
+    def _import_video_analyzer(self):
+        """导入视频分析器"""
+        import_attempts = [
+            ('analyzer.video_analyzer', lambda: __import__('analyzer.video_analyzer', fromlist=['VideoAnalyzer']).VideoAnalyzer()),
+            ('core.analyzer.video_analyzer', lambda: __import__('core.analyzer.video_analyzer', fromlist=['VideoAnalyzer']).VideoAnalyzer()),
+        ]
+        
+        for import_path, import_func in import_attempts:
+            try:
+                print(f"    尝试导入: {import_path}")
+                analyzer = import_func()
+                ErrorHandler.log_success(f"成功导入: {import_path}")
+                return analyzer
+            except ImportError as e:
+                ErrorHandler.handle_import_error(import_path, e)
+                continue
+        
+        raise ImportError("无法找到 VideoAnalyzer")
 
-    def _step3_generate_editing_strategy_debug(self, user_options: Dict[str, Any], api_key: str, use_local_ai: bool):
+    def _step3_generate_editing_strategy(self, user_options: Dict[str, Any], api_key: str, use_local_ai: bool):
         """步骤3: 策略生成"""
-        print("\n🧠 步骤3: 生成剪辑策略")
-
+        user_options = self._prepare_user_options(user_options)
+        
+        for i, analysis in enumerate(self.analysis_results):
+            print(f"  为视频 {i + 1} 生成策略...")
+            strategy = self._generate_single_strategy(analysis, user_options, api_key, use_local_ai)
+            self.editing_strategies.append(strategy)
+            
+            actions = strategy.get('actions', [])
+            print(f"    📊 策略生成完成，包含 {len(actions)} 个操作")
+    
+    def _prepare_user_options(self, user_options: Dict[str, Any]) -> Dict[str, Any]:
+        """准备用户选项"""
         default_options = {
-            "target_duration": 30,
+            "target_duration": self.video_config['default_target_duration'],
             "target_style": "抖音风",
             "target_purpose": "社交媒体"
         }
-        user_options = {**default_options, **(user_options or {})}
-
-        for i, analysis in enumerate(self.analysis_results):
-            print(f"  为视频 {i + 1} 生成策略...")
-
-            # 强制使用AI策略，如果没有API key则抛出错误
+        return {**default_options, **(user_options or {})}
+    
+    def _generate_single_strategy(self, analysis: Dict[str, Any], user_options: Dict[str, Any], 
+                                api_key: str, use_local_ai: bool) -> Dict[str, Any]:
+        """为单个视频生成策略"""
+        if use_local_ai or not api_key:
             if not api_key:
-                raise ValueError("❌ 必须提供API key才能使用AI策略生成")
-
-            print(f"    🤖 使用AI策略生成")
-            strategy = self._generate_ai_multi_segment_strategy(analysis, user_options, api_key)
-
-            self.editing_strategies.append(strategy)
-
-            actions = strategy.get('actions', [])
-            print(actions)
-            print(f"    📊 策略生成完成，包含 {len(actions)} 个操作")
+                ErrorHandler.log_warning("未提供API key，使用本地策略")
+            return self._generate_local_strategy(analysis, user_options)
+        
+        print(f"    🤖 使用AI策略生成")
+        return self._generate_ai_multi_segment_strategy(analysis, user_options, api_key)
+    
+    def _generate_local_strategy(self, analysis: Dict[str, Any], user_options: Dict[str, Any]) -> Dict[str, Any]:
+        """生成本地策略"""
+        # 简化的本地策略生成逻辑
+        target_duration = user_options.get('target_duration', 30)
+        return {
+            "target_duration": target_duration,
+            "strategy_type": "single_segment",
+            "actions": [{
+                "function": "cut",
+                "start": 0,
+                "end": target_duration,
+                "reason": "本地策略简单剪辑"
+            }],
+            "metadata": {
+                "source": "local",
+                "confidence": 0.6
+            }
+        }
 
     def _generate_ai_multi_segment_strategy(self, analysis: Dict[str, Any], user_options: Dict[str, Any],
                                             api_key: str) -> Dict[str, Any]:
@@ -246,73 +274,51 @@ class VideoEditingOrchestrator:
 
         return prompt
 
-    def _step4_execute_editing_debug(self):
+    def _step4_execute_editing(self):
         """步骤4: 执行剪辑操作"""
-        print("\n🎬 步骤4: 执行剪辑操作")
-
         edited_clips = []
-
+        
         for i, (video_path, strategy) in enumerate(zip(self.video_files, self.editing_strategies)):
             print(f"  剪辑视频 {i + 1}: {os.path.basename(video_path)}")
-
-            # 使用完全安全的剪辑方法
-            final_clip = self._completely_safe_video_editing(video_path, strategy)
-            edited_clips.append(final_clip)
-            print(f"    ✅ 完成剪辑，最终时长: {final_clip.duration:.1f}秒")
-
+            
+            try:
+                final_clip = self._safe_video_editing(video_path, strategy)
+                edited_clips.append(final_clip)
+                print(f"    ✅ 完成剪辑，最终时长: {final_clip.duration:.1f}秒")
+            except Exception as e:
+                ErrorHandler.handle_file_error("剪辑", video_path, e)
+                # 可以选择继续或抛出异常
+                raise
+        
         return edited_clips
 
-    def _completely_safe_video_editing(self, video_path: str, strategy: Dict[str, Any]):
-        """完全安全的视频剪辑方法 - 彻底修复音频问题"""
+    def _safe_video_editing(self, video_path: str, strategy: Dict[str, Any]):
+        """安全的视频剪辑方法"""
         print(f"    📥 安全加载视频: {os.path.basename(video_path)}")
-
-        # 🔥 关键修复1: 初始加载时就检查音频状态
-        clip = None
-        has_audio = False
-
+        
+        # 使用统一的视频处理器加载视频
+        clip, has_audio = video_processor.safe_load_video(video_path)
+        if clip is None:
+            raise ValueError(f"无法加载视频: {video_path}")
+        
         try:
-            clip = VideoFileClip(video_path)
-            original_duration = clip.duration
-
-            # 🔥 关键修复2: 安全检查音频状态
-            try:
-                has_audio = (clip.audio is not None and
-                             hasattr(clip.audio, 'reader') and
-                             clip.audio.reader is not None)
-                if has_audio:
-                    # 测试音频是否真的可用
-                    _ = clip.audio.duration
-                    print(f"    ✅ 音频检查通过")
-            except Exception as e:
-                print(f"    ⚠️ 音频不可用，将移除音频: {e}")
-                has_audio = False
-                clip = clip.without_audio()
-
-            print(f"    📊 原始视频信息:")
-            print(f"      - 时长: {clip.duration:.1f}秒")
-            print(f"      - 分辨率: {clip.w}x{clip.h}")
-            print(f"      - FPS: {clip.fps}")
-            print(f"      - 音频: {'有' if has_audio else '无'}")
-
+            actions = strategy.get('actions', [])
+            strategy_type = strategy.get('strategy_type', 'single_segment')
+            
+            print(f"    📋 策略类型: {strategy_type}")
+            print(f"    📋 操作数量: {len(actions)}")
+            
+            # 根据策略类型处理
+            if strategy_type == 'multi_segment':
+                return self._execute_multi_segment_strategy(clip, actions, has_audio)
+            else:
+                return self._execute_single_segment_strategy(clip, actions, has_audio)
+        
         except Exception as e:
-            print(f"    ❌ 视频加载失败: {e}")
-            if clip:
-                clip.close()
+            clip.close()
             raise e
 
-        actions = strategy.get('actions', [])
-        strategy_type = strategy.get('strategy_type', 'single_segment')
-
-        print(f"    📋 策略类型: {strategy_type}")
-        print(f"    📋 操作数量: {len(actions)}")
-
-        # 根据策略类型处理
-        if strategy_type == 'multi_segment':
-            return self._execute_multi_segment_strategy_safe(clip, actions, has_audio)
-        else:
-            return self._execute_single_segment_strategy_safe(clip, actions, has_audio)
-
-    def _execute_single_segment_strategy_safe(self, clip, actions, has_audio):
+    def _execute_single_segment_strategy(self, clip, actions, has_audio):
         """执行单片段策略 - 完全安全版本"""
         print(f"    ✂️ 执行单片段策略")
 
@@ -445,12 +451,10 @@ class VideoEditingOrchestrator:
             print(f"    ❌ 多片段处理失败: {e}")
             return clip.without_audio() if has_audio else clip
 
-    def _step5_output_final_video_completely_fixed(self, edited_clips, merge_videos: bool):
-        """步骤5: 完全修复版视频输出"""
-        print("\n📼 步骤5: 输出最终视频（完全修复版）")
-
-        os.makedirs(self.output_dir, exist_ok=True)
-        output_filename = "completely_fixed_edited_video.mp4"
+    def _step5_output_final_video(self, edited_clips, merge_videos: bool):
+        """步骤5: 输出最终视频"""
+        PathHelper.ensure_dir_exists(self.output_dir)
+        output_filename = "edited_video.mp4"
         output_path = os.path.join(self.output_dir, output_filename)
 
         # 更安全的合并方式

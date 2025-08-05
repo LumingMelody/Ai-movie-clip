@@ -1,8 +1,7 @@
-# ai/ai_model_caller.py
 # -*- coding: utf-8 -*-
 """
-AI模型调用器 - 支持通义千问等大语言模型
-使用OpenAI兼容格式调用阿里云通义千问API
+AI模型调用器 - 重构版本
+功能：支持通义千问等大语言模型，使用OpenAI兼容格式
 """
 
 import json
@@ -12,65 +11,37 @@ import re
 import os
 from typing import Dict, Any, Optional, List
 
+from core.utils.config_manager import config, ErrorHandler
+
 
 class AIModelCaller:
-    """AI模型调用器 - 支持在线和本地模式"""
+    """AI模型调用器 - 重构版本"""
 
-    def __init__(self, api_key: str = None, model: str = "qwen-max"):
+    def __init__(self, api_key: str = None, model: str = None):
         """
         初始化AI模型调用器
 
         Args:
-            api_key: API密钥，如果为None则从环境变量或api_key.txt读取
-            model: 模型名称，默认qwen-plus
+            api_key: API密钥，如果为None则从配置加载
+            model: 模型名称，默认使用配置中的模型
         """
-        self.api_key = api_key or self._load_api_key()
-        self.model = model
-        # 使用OpenAI兼容接口
-        self.base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        self.max_retries = 3
-        self.timeout = 60
+        # 加载配置
+        self.ai_config = config.get_config('ai')
+        
+        self.api_key = api_key or config.get_api_key()
+        self.model = model or self.ai_config['default_model']
+        self.base_url = self.ai_config['base_url']
+        self.max_retries = self.ai_config['max_retries']
+        self.timeout = self.ai_config['timeout']
+        self.supported_models = self.ai_config['supported_models']
 
-        # 支持的模型列表
-        self.supported_models = [
-            "qwen-max",
-        ]
+        self._validate_model()
 
+    def _validate_model(self):
+        """验证模型是否支持"""
         if self.model not in self.supported_models:
-            print(f"⚠️ 警告: {self.model} 不在支持的模型列表中")
+            ErrorHandler.log_warning(f"{self.model} 不在支持的模型列表中")
             print(f"支持的模型: {', '.join(self.supported_models)}")
-
-    def _load_api_key(self) -> Optional[str]:
-        """从多个来源加载API密钥"""
-        # 1. 环境变量
-        api_key = os.getenv('DASHSCOPE_API_KEY')
-        if api_key:
-            return api_key
-
-        # 2. 当前目录的api_key.txt
-        api_key_file = "api_key.txt"
-        if os.path.exists(api_key_file):
-            try:
-                with open(api_key_file, 'r', encoding='utf-8') as f:
-                    api_key = f.read().strip()
-                    if api_key:
-                        return api_key
-            except Exception as e:
-                print(f"读取api_key.txt失败: {e}")
-
-        # 3. 上级目录的api_key.txt
-        parent_api_key_file = "../api_key.txt"
-        if os.path.exists(parent_api_key_file):
-            try:
-                with open(parent_api_key_file, 'r', encoding='utf-8') as f:
-                    api_key = f.read().strip()
-                    if api_key:
-                        return api_key
-            except Exception as e:
-                print(f"读取../api_key.txt失败: {e}")
-
-        print("⚠️ 警告: 未找到API密钥")
-        return None
 
     def generate_editing_plan(self, prompt: str, use_local: bool = False) -> Dict[str, Any]:
         """
@@ -85,43 +56,45 @@ class AIModelCaller:
         """
         if use_local or not self.api_key:
             if not self.api_key:
-                print("❌ 未配置API密钥，使用本地策略")
+                ErrorHandler.log_warning("未配置API密钥，使用本地策略")
             return self._generate_local_plan(prompt)
 
         # 在线调用，带重试机制
+        return self._try_online_generation(prompt)
+    
+    def _try_online_generation(self, prompt: str) -> Dict[str, Any]:
+        """尝试在线生成，带重试机制"""
         for attempt in range(self.max_retries):
             try:
                 print(f"🤖 正在调用{self.model} API... (尝试 {attempt + 1}/{self.max_retries})")
                 return self._call_qwen_openai_compatible(prompt)
 
             except requests.exceptions.Timeout as e:
-                print(f"⏰ 第{attempt + 1}次调用超时: {e}")
-                if attempt < self.max_retries - 1:
-                    wait_time = (attempt + 1) * 2  # 递增等待：2s, 4s, 6s
-                    print(f"等待 {wait_time} 秒后重试...")
-                    time.sleep(wait_time)
-                else:
-                    print("❌ 所有重试都失败了，降级到本地策略")
-                    return self._generate_local_plan(prompt)
-
+                if not self._handle_retry("API调用超时", e, attempt):
+                    break
             except requests.exceptions.RequestException as e:
-                print(f"🔌 网络请求错误: {e}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(2)
-                else:
-                    print("❌ 网络问题，降级到本地策略")
-                    return self._generate_local_plan(prompt)
-
+                if not self._handle_retry("网络请求错误", e, attempt):
+                    break
             except Exception as e:
-                print(f"❌ 调用出错: {e}")
-                if attempt < self.max_retries - 1:
-                    time.sleep(1)
-                else:
-                    print("❌ 所有尝试都失败，降级到本地策略")
-                    return self._generate_local_plan(prompt)
+                if not self._handle_retry("API调用", e, attempt):
+                    break
+        
+        ErrorHandler.log_warning("所有在线尝试都失败，降级到本地策略")
+        return self._generate_local_plan(prompt)
+    
+    def _handle_retry(self, error_type: str, error: Exception, attempt: int) -> bool:
+        """处理重试逻辑"""
+        ErrorHandler.handle_api_error(error_type, error, attempt + 1)
+        
+        if attempt < self.max_retries - 1:
+            wait_time = (attempt + 1) * 2  # 递增等待
+            print(f"等待 {wait_time} 秒后重试...")
+            time.sleep(wait_time)
+            return True
+        return False
 
     def _call_qwen_openai_compatible(self, prompt: str) -> Dict[str, Any]:
-        """调用Qwen API - OpenAI兼容格式 - 增强版多片段策略"""
+        """调用Qwen API - OpenAI兼容格式"""
 
         headers = {
             'Authorization': f'Bearer {self.api_key}',
@@ -281,61 +254,61 @@ class AIModelCaller:
         请严格按照上述JSON格式返回多片段剪辑策略，不要包含任何解释文字，仅返回JSON内容。"""
 
         # OpenAI兼容格式的请求体
-        data = {
+        data = self._build_request_data(system_prompt, prompt)
+
+        return self._make_api_request(headers, data, prompt)
+    
+    def _build_request_data(self, system_prompt: str, prompt: str) -> Dict[str, Any]:
+        """构建请求数据"""
+        return {
             "model": self.model,
             "messages": [
-                {
-                    "role": "system",
-                    "content": system_prompt
-                },
-                {
-                    "role": "user",
-                    "content": prompt + "\n\n请生成智能多片段剪辑策略，选择3-5个最精彩的片段组合成目标时长的短视频。严格按照JSON格式返回，不要包含任何解释文字。"
-                }
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt + "\n\n请生成智能多片段剪辑策略。严格按照JSON格式返回。"}
             ],
-            "max_tokens": 3000,  # 增加token数量以支持更复杂的策略
-            "temperature": 0.8  # 稍微提高创造性
+            "max_tokens": self.ai_config['max_tokens'],
+            "temperature": self.ai_config['temperature']
         }
-
+    
+    def _make_api_request(self, headers: Dict[str, str], data: Dict[str, Any], prompt: str) -> Dict[str, Any]:
+        """执行API请求"""
         url = f"{self.base_url}/chat/completions"
-
-        print(f"📡 正在调用 {self.model} API (多片段策略)...")
-        response = requests.post(
-            url,
-            json=data,
-            headers=headers,
-            timeout=self.timeout
-        )
-
+        
+        print(f"📡 正在调用 {self.model} API...")
+        response = requests.post(url, json=data, headers=headers, timeout=self.timeout)
+        
         if response.status_code == 200:
-            result = response.json()
-            content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
-            print(f"AI多片段策略: {content[:200]}...")  # 只显示前200字符
-            print(f"✅ API调用成功，响应长度: {len(content)} 字符")
-
-            # 解析AI响应
-            plan = self._parse_ai_response(content)
-            if plan:
-                # 验证多片段策略的完整性
-                if self._validate_multi_segment_plan(plan):
-                    print("✅ 多片段AI策略解析成功")
-                    return plan
-                else:
-                    print("⚠️ 多片段策略验证失败，使用本地策略")
-                    return self._generate_local_multi_segment_plan(prompt)
-            else:
-                print("⚠️ AI响应解析失败，使用本地多片段策略")
-                return self._generate_local_multi_segment_plan(prompt)
-
+            return self._process_successful_response(response, prompt)
         else:
-            error_msg = f"API调用失败: {response.status_code}"
-            if response.text:
-                try:
-                    error_detail = response.json()
-                    error_msg += f" - {error_detail.get('error', {}).get('message', response.text)}"
-                except:
-                    error_msg += f" - {response.text}"
-            raise Exception(error_msg)
+            raise Exception(self._build_error_message(response))
+    
+    def _process_successful_response(self, response, prompt: str) -> Dict[str, Any]:
+        """处理成功的API响应"""
+        result = response.json()
+        content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+        
+        print(f"AI策略: {content[:200]}...")  # 只显示前200字符
+        ErrorHandler.log_success(f"API调用成功，响应长度: {len(content)} 字符")
+        
+        # 解析AI响应
+        plan = self._parse_ai_response(content)
+        if plan and self._validate_multi_segment_plan(plan):
+            ErrorHandler.log_success("AI策略解析成功")
+            return plan
+        else:
+            ErrorHandler.log_warning("策略验证失败，使用本地策略")
+            return self._generate_local_multi_segment_plan(prompt)
+    
+    def _build_error_message(self, response) -> str:
+        """构建错误消息"""
+        error_msg = f"API调用失败: {response.status_code}"
+        if response.text:
+            try:
+                error_detail = response.json()
+                error_msg += f" - {error_detail.get('error', {}).get('message', response.text)}"
+            except:
+                error_msg += f" - {response.text}"
+        return error_msg
 
     def _validate_multi_segment_plan(self, plan: Dict[str, Any]) -> bool:
         """验证多片段剪辑计划的格式是否正确"""

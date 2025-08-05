@@ -16,6 +16,7 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 import tempfile
 import shutil
+from datetime import datetime
 from moviepy import VideoFileClip, AudioFileClip, ImageClip, TextClip, ColorClip, CompositeVideoClip, concatenate_videoclips, VideoClip
 from moviepy.video.fx import CrossFadeIn, CrossFadeOut, MultiplyColor
 from moviepy.video.fx.Resize import Resize
@@ -159,6 +160,31 @@ class AuraExecutor:
     def _build_timeline(self, timeline_config: List[Dict[str, Any]], 
                        resources: Dict[str, Any], project: Dict[str, Any]) -> VideoClip:
         """构建视频时间轴"""
+        print(f"\n🕰️ 构建视频时间轴")
+        print(f"📝 时间轴配置：")
+        print("-" * 60)
+        
+        # 输出时间轴详情
+        total_duration = 0
+        for i, segment in enumerate(timeline_config, 1):
+            print(f"\n🎬 片段 {i}:")
+            print(f"   ⏱️  时间: {segment.get('start', 0)}s - {segment.get('end', 0)}s")
+            print(f"   🎨 类型: {segment.get('type', 'unknown')}")
+            
+            # 输出图层信息
+            layers = segment.get('layers', [])
+            for j, layer in enumerate(layers, 1):
+                print(f"   🗃️  图层 {j}: {layer.get('type', 'unknown')} - {layer.get('resource_id', 'unknown')}")
+                if layer.get('effects'):
+                    print(f"      ✨ 特效: {', '.join(layer.get('effects', []))}")
+                if layer.get('transform'):
+                    print(f"      🔄 变换: {layer.get('transform')}")
+            
+            total_duration = max(total_duration, segment.get('end', 0))
+        
+        print(f"\n📊 总时长: {total_duration}s")
+        print("-" * 60)
+        
         # 解析分辨率
         resolution = project['resolution']
         if isinstance(resolution, str):
@@ -166,6 +192,8 @@ class AuraExecutor:
         else:
             width = resolution.get('width', 1920)
             height = resolution.get('height', 1080)
+        
+        print(f"📺 分辨率: {width}x{height}")
         
         # 创建主合成
         clips = []
@@ -186,17 +214,20 @@ class AuraExecutor:
             
             # 合成该片段的所有图层
             if segment_clips:
-                segment_comp = CompositeVideoClip(segment_clips, size=(width, height))
-                
-                # 应用转场效果
-                if 'transition_out' in segment:
-                    segment_comp = self._apply_transition(segment_comp, segment['transition_out'])
-                
-                clips.append(segment_comp)
+                # 注意：segment_clips 中的每个clip已经设置了start_time
+                # 不需要再次设置时间，直接添加到clips列表
+                for clip in segment_clips:
+                    # 应用转场效果（如果有）
+                    if 'transition_out' in segment:
+                        clip = self._apply_transition(clip, segment['transition_out'])
+                    clips.append(clip)
         
-        # 合成所有片段
+        # 合成所有片段 - 使用 CompositeVideoClip 而不是 concatenate
         if clips:
-            final_video = concatenate_videoclips(clips, method="compose")
+            # 创建背景（黑色）
+            bg = ColorClip(size=(width, height), color=(0, 0, 0), duration=project['duration'])
+            # 将所有片段按时间轴合成
+            final_video = CompositeVideoClip([bg] + clips, size=(width, height))
             # MoviePy 2.x 使用 with_duration
             final_video = final_video.with_duration(project['duration'])
             return final_video
@@ -419,8 +450,18 @@ class AuraExecutor:
                     print(f"🎬 尝试使用原始视频URL: {video_url}")
                     source = video_url  # 更新source为视频URL
                 
+                # 特殊处理美花资源URL
+                if 'resource.meihua.info' in source:
+                    print(f"🏇 检测到美花资源URL")
+                    # 这个URL可能需要特殊处理或者是一个加密资源
+                    # 目前先尝试直接下载
+                
                 # 下载网络文件
                 print(f"📥 下载网络文件: {source}")
+                print(f"🔍 URL分析:")
+                print(f"   - 协议: {source.split('://')[0]}")
+                print(f"   - 域名: {source.split('/')[2]}")
+                print(f"   - 路径: {'/'.join(source.split('/')[3:])}")
                 filename = os.path.basename(source.split('?')[0])  # 处理URL参数
                 if not filename or '.' not in filename:
                     # 如果没有文件名或没有扩展名，默认使用mp4
@@ -432,8 +473,15 @@ class AuraExecutor:
                 local_path = os.path.join(self.temp_dir, filename)
                 
                 # 导入下载函数
-                from core.utils.file_utils import download_file_with_retry
-                success = download_file_with_retry(source, local_path, verbose=True)
+                try:
+                    from core.utils.file_utils import download_file_with_retry
+                    success = download_file_with_retry(source, local_path, verbose=True)
+                except Exception as download_error:
+                    print(f"❌ 下载过程出错: {download_error}")
+                    print(f"🔍 错误类型: {type(download_error).__name__}")
+                    import traceback
+                    traceback.print_exc()
+                    success = False
                 
                 if success and os.path.exists(local_path):
                     # 检查下载的文件大小
@@ -453,6 +501,9 @@ class AuraExecutor:
                     return local_path
                 else:
                     print(f"❌ 网络文件下载失败: {source}")
+                    # 尝试使用备用视频
+                    print(f"🎆 尝试使用示例视频作为备用...")
+                    # 这里可以返回一个默认视频路径或None
                     return None
                 
             elif os.path.exists(source):

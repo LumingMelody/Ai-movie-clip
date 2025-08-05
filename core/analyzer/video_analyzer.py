@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2025/6/9 17:46
-# @Author  : 蔍鸣霸霸
-# @FileName: video_analyzer.py.py
-# @Software: PyCharm
-# @Blog    ：只因你太美
+"""
+视频分析器 - 重构版本
+功能：视频内容分析、场景检测、语音识别、对象检测等
+"""
 
-# analyzer/video_analyzer.py
 import subprocess
 import json
 import os
@@ -15,6 +13,9 @@ import librosa
 import numpy as np
 import whisper
 from ultralytics import YOLO
+from typing import Dict, Any, List, Optional
+
+from core.utils.config_manager import config, ErrorHandler, PathHelper
 
 try:
     # 新版本 PySceneDetect API (推荐)

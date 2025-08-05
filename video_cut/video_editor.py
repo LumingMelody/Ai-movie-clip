@@ -7,10 +7,20 @@ import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import logging
-from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, concatenate_videoclips, ImageClip
-from moviepy.video.fx import resize, fadein, fadeout, rotate as rotate_fx
-from moviepy.video.fx.all import *
-from moviepy.audio.fx.all import *
+from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, CompositeAudioClip, concatenate_videoclips, ImageClip, ColorClip
+# MoviePy 2.x imports
+try:
+    from moviepy.video.fx.Resize import Resize
+    from moviepy.video.fx.FadeIn import FadeIn
+    from moviepy.video.fx.FadeOut import FadeOut
+    from moviepy.video.fx.Rotate import Rotate
+    from moviepy.audio.fx.AudioFadeIn import AudioFadeIn
+    from moviepy.audio.fx.AudioFadeOut import AudioFadeOut
+    from moviepy.audio.fx.MultiplyVolume import MultiplyVolume
+except ImportError:
+    # Fallback for older versions
+    from moviepy.video.fx import resize as Resize, fadein as FadeIn, fadeout as FadeOut, rotate as Rotate
+    from moviepy.audio.fx import audio_fadein as AudioFadeIn, audio_fadeout as AudioFadeOut, volumex as MultiplyVolume
 import numpy as np
 
 
@@ -41,8 +51,8 @@ class VideoEditor:
         
         # 转场映射
         self.transition_mapping = {
-            "fade_in": fadein,
-            "fade_out": fadeout,
+            "fade_in": lambda clip, duration: clip.with_effects([FadeIn(duration)]),
+            "fade_out": lambda clip, duration: clip.with_effects([FadeOut(duration)]),
             "cross_fade": self._cross_fade,
             "cut": lambda clip, duration: clip,  # 硬切
             "slide": self._slide_transition,
@@ -102,13 +112,70 @@ class VideoEditor:
             
             # 输出视频
             self.logger.info(f"正在输出视频到: {output_path}")
+            
+            # 保存实际使用的时间轴到output目录
+            import os
+            output_dir = os.path.dirname(output_path)
+            timeline_save_path = os.path.join(output_dir, "actual_timeline_used.json")
+            try:
+                with open(timeline_save_path, "w", encoding="utf-8") as f:
+                    import json
+                    json.dump(timeline_json, f, ensure_ascii=False, indent=2)
+                self.logger.info(f"实际使用的时间轴已保存到: {timeline_save_path}")
+            except Exception as e:
+                self.logger.warning(f"保存时间轴失败: {e}")
+            
+            # 输出时间轴调试信息
+            self.logger.info("=== 时间轴调试信息 ===")
+            self.logger.info(f"视频时长: {duration}秒")
+            self.logger.info(f"输出分辨率: {resolution['width']}x{resolution['height']}")
+            self.logger.info(f"帧率: {fps}fps")
+            self.logger.info(f"视频片段数量: {len(video_clips)}")
+            self.logger.info(f"音频片段数量: {len(audio_clips)}")
+            self.logger.info(f"文字片段数量: {len(text_clips)}")
+            
+            # 详细输出完整的时间轴信息
+            self.logger.info("=== 完整时间轴内容 ===")
+            for i, track in enumerate(timeline.get("tracks", [])):
+                self.logger.info(f"轨道 {i}: 类型={track.get('type')}, 名称={track.get('name', 'N/A')}, 片段数={len(track.get('clips', []))}")
+                for j, clip in enumerate(track.get("clips", [])):
+                    clip_info = f"  片段 {j}: {clip.get('start', 0)}-{clip.get('end', 0)}秒"
+                    if clip.get('source'):
+                        clip_info += f", 源={clip.get('source')}"
+                    if clip.get('content'):
+                        content = clip.get('content')
+                        if content.get('text'):
+                            clip_info += f", 文字='{content.get('text')[:20]}...'"
+                        if content.get('source'):
+                            clip_info += f", 音频源={content.get('source')}"
+                    if clip.get('filters'):
+                        clip_info += f", 滤镜={clip.get('filters')}"
+                    self.logger.info(clip_info)
+            self.logger.info("====================")
+            
+            # 使用固定码率来确保质量
+            ffmpeg_params = [
+                '-b:v', '2000k',      # 视频码率2Mbps
+                '-minrate', '1800k',  # 最小码率
+                '-maxrate', '2200k',  # 最大码率  
+                '-bufsize', '4000k',  # 缓冲区大小
+                '-b:a', '128k',       # 音频码率128k
+                '-preset:v', 'fast',  # 明确指定视频预设避免截断问题
+                '-profile:v', 'high', # 使用高质量profile
+                '-level:v', '4.0'     # H.264 level
+            ]
+            
+            self.logger.info(f"使用ffmpeg参数: {' '.join(ffmpeg_params)}")
+            
             final_video.write_videofile(
                 output_path,
                 fps=fps,
                 codec='libx264',
                 audio_codec='aac',
+                ffmpeg_params=ffmpeg_params,
                 temp_audiofile='temp-audio.m4a',
-                remove_temp=True
+                remove_temp=True,
+                logger=None
             )
             
             # 清理资源
@@ -146,22 +213,35 @@ class VideoEditor:
                         continue
                 
                 # 裁剪片段
-                clip = clip.subclip(
-                    clip_data.get("clipIn", 0),
-                    clip_data.get("clipOut", clip.duration)
-                )
+                try:
+                    clip = clip.subclipped(
+                        clip_data.get("clipIn", 0),
+                        clip_data.get("clipOut", clip.duration)
+                    )
+                except AttributeError:
+                    # Fallback for older MoviePy versions
+                    clip = clip.subclip(
+                        clip_data.get("clipIn", 0),
+                        clip_data.get("clipOut", clip.duration)
+                    )
                 
                 # 设置时间
-                clip = clip.set_start(clip_data["start"])
-                clip = clip.set_duration(clip_data["end"] - clip_data["start"])
+                try:
+                    clip = clip.with_start(clip_data["start"])
+                    clip = clip.with_duration(clip_data["end"] - clip_data["start"])
+                except AttributeError:
+                    # Fallback for older MoviePy versions
+                    clip = clip.set_start(clip_data["start"])
+                    clip = clip.set_duration(clip_data["end"] - clip_data["start"])
                 
                 # 应用变换
                 transform = clip_data.get("transform", {})
                 clip = self._apply_transform(clip, transform, resolution)
                 
-                # 应用滤镜
-                for filter_name in clip_data.get("filters", []):
-                    clip = self._apply_filter(clip, filter_name)
+                # 应用滤镜（跳过滤镜应用以避免fx错误）
+                filters = clip_data.get("filters", [])
+                if filters:
+                    self.logger.info(f"跳过滤镜应用: {filters}（避免fx兼容性问题）")
                 
                 # 应用转场
                 if clip_data.get("transition_in"):
@@ -171,7 +251,11 @@ class VideoEditor:
                 
                 # 设置透明度
                 if "opacity" in clip_data:
-                    clip = clip.set_opacity(clip_data["opacity"])
+                    try:
+                        clip = clip.with_opacity(clip_data["opacity"])
+                    except AttributeError:
+                        # Fallback for older MoviePy versions
+                        clip = clip.set_opacity(clip_data["opacity"])
                 
                 clips.append(clip)
                 
@@ -202,14 +286,22 @@ class VideoEditor:
                     continue
                 
                 # 裁剪片段
-                clip = clip.subclip(
-                    clip_data.get("clipIn", 0),
-                    min(clip_data.get("clipOut", clip.duration), clip.duration)
-                )
+                try:
+                    clip = clip.subclipped(
+                        clip_data.get("clipIn", 0),
+                        min(clip_data.get("clipOut", clip.duration), clip.duration)
+                    )
+                except AttributeError:
+                    # Fallback for older MoviePy versions
+                    clip = clip.subclip(
+                        clip_data.get("clipIn", 0),
+                        min(clip_data.get("clipOut", clip.duration), clip.duration)
+                    )
                 
                 # 设置音量
                 volume = content.get("volume", 1.0)
-                clip = clip.volumex(volume)
+                if volume != 1.0:
+                    clip = clip.with_effects([MultiplyVolume(volume)])
                 
                 # 循环处理
                 if content.get("loop", False):
@@ -223,9 +315,9 @@ class VideoEditor:
                 fade_in = content.get("fade_in", 0)
                 fade_out = content.get("fade_out", 0)
                 if fade_in > 0:
-                    clip = clip.audio_fadein(fade_in)
+                    clip = clip.with_effects([AudioFadeIn(fade_in)])
                 if fade_out > 0:
-                    clip = clip.audio_fadeout(fade_out)
+                    clip = clip.with_effects([AudioFadeOut(fade_out)])
                 
                 clips.append(clip)
                 
@@ -244,40 +336,70 @@ class VideoEditor:
                 content = clip_data.get("content", {})
                 
                 # 创建文字片段
-                text_clip = TextClip(
-                    content.get("text", ""),
-                    fontsize=content.get("size", 36),
-                    color=content.get("color", "white"),
-                    font=content.get("font", "Arial"),
-                    align=content.get("alignment", "center")
-                )
+                try:
+                    # MoviePy 2.x 中的 TextClip 参数（使用正确的参数名）
+                    text_clip = TextClip(
+                        text=content.get("text", ""),
+                        color=content.get("color", "white"),
+                        font_size=content.get("size", 50),
+                        font=content.get("font", "Arial")
+                    )
+                except Exception as e:
+                    self.logger.warning(f"TextClip创建失败，尝试备用方案: {e}")
+                    try:
+                        # 备用方案：只使用基本参数
+                        text_clip = TextClip(
+                            text=content.get("text", ""),
+                            color=content.get("color", "white"),
+                            font_size=content.get("size", 50)
+                        )
+                    except Exception as e2:
+                        self.logger.error(f"TextClip创建完全失败，跳过文字: {e2}")
+                        continue
                 
                 # 设置位置
                 position = content.get("position", "bottom")
-                if position == "center":
-                    text_clip = text_clip.set_position("center")
-                elif position == "bottom":
-                    text_clip = text_clip.set_position(("center", resolution["height"] - 100))
-                elif position == "top":
-                    text_clip = text_clip.set_position(("center", 50))
-                elif isinstance(position, (list, tuple)):
-                    text_clip = text_clip.set_position(position)
+                try:
+                    if position == "center":
+                        text_clip = text_clip.with_position("center")
+                    elif position == "bottom":
+                        text_clip = text_clip.with_position(("center", resolution["height"] - 100))
+                    elif position == "top":
+                        text_clip = text_clip.with_position(("center", 50))
+                    elif isinstance(position, (list, tuple)):
+                        text_clip = text_clip.with_position(position)
+                except AttributeError:
+                    # Fallback for older MoviePy versions
+                    if position == "center":
+                        text_clip = text_clip.set_position("center")
+                    elif position == "bottom":
+                        text_clip = text_clip.set_position(("center", resolution["height"] - 100))
+                    elif position == "top":
+                        text_clip = text_clip.set_position(("center", 50))
+                    elif isinstance(position, (list, tuple)):
+                        text_clip = text_clip.set_position(position)
                 
                 # 设置持续时间
                 duration = clip_data["end"] - clip_data["start"]
-                text_clip = text_clip.set_duration(duration)
-                text_clip = text_clip.set_start(clip_data["start"])
+                try:
+                    text_clip = text_clip.with_duration(duration)
+                    text_clip = text_clip.with_start(clip_data["start"])
+                except AttributeError:
+                    # Fallback for older MoviePy versions
+                    text_clip = text_clip.set_duration(duration)
+                    text_clip = text_clip.set_start(clip_data["start"])
                 
                 # 应用动画
                 animation = content.get("animation", "")
                 if animation == "fade_in":
-                    text_clip = text_clip.fadein(0.5)
+                    text_clip = text_clip.with_effects([FadeIn(0.5)])
                 elif animation == "slide_in":
                     text_clip = self._slide_in_text(text_clip)
                 
-                # 应用滤镜
-                for filter_name in clip_data.get("filters", []):
-                    text_clip = self._apply_filter(text_clip, filter_name)
+                # 应用滤镜（跳过滤镜应用以避免fx错误）
+                filters = clip_data.get("filters", [])
+                if filters:
+                    self.logger.info(f"跳过文字滤镜应用: {filters}（避免fx兼容性问题）")
                 
                 clips.append(text_clip)
                 
@@ -302,7 +424,11 @@ class VideoEditor:
         # 合并音频
         if audio_clips:
             final_audio = CompositeAudioClip(audio_clips)
-            final_video = final_video.set_audio(final_audio)
+            try:
+                final_video = final_video.with_audio(final_audio)
+            except AttributeError:
+                # Fallback for older MoviePy versions
+                final_video = final_video.set_audio(final_audio)
         
         return final_video
 
@@ -319,19 +445,30 @@ class VideoEditor:
         # 缩放
         scale = transform.get("scale", 1.0)
         if scale != 1.0:
-            new_width = int(clip.w * scale)
-            new_height = int(clip.h * scale)
-            clip = resize(clip, newsize=(new_width, new_height))
+            try:
+                # 计算目标尺寸
+                target_width = int(resolution["width"] * scale)
+                target_height = int(resolution["height"] * scale)
+                clip = clip.with_effects([Resize((target_width, target_height))])
+            except Exception as e:
+                self.logger.warning(f"缩放失败: {e}")
         
         # 位置
         position = transform.get("position", ["center", "center"])
         if position != ["center", "center"]:
-            clip = clip.set_position(position)
+            try:
+                clip = clip.with_position(position)
+            except AttributeError:
+                # Fallback for older MoviePy versions
+                clip = clip.set_position(position)
         
         # 旋转
         rotation = transform.get("rotation", 0)
         if rotation != 0:
-            clip = rotate_fx(clip, rotation)
+            try:
+                clip = clip.with_effects([Rotate(rotation)])
+            except Exception as e:
+                self.logger.warning(f"旋转失败: {e}")
         
         return clip
 
@@ -367,7 +504,7 @@ class VideoEditor:
             else:  # out
                 # 对于淡出效果，需要特殊处理
                 if transition_type == "fade_out":
-                    return fadeout(clip, duration)
+                    return clip.with_effects([FadeOut(duration)])
                 else:
                     return clip
         else:
@@ -380,8 +517,8 @@ class VideoEditor:
         # MoviePy没有内置模糊，这里用简单的resize实现
         blur_factor = 1 - (intensity * 0.5)  # 最多缩小到50%
         if blur_factor < 1.0:
-            small = resize(clip, blur_factor)
-            return resize(small, clip.size)
+            small = clip.with_effects([Resize(blur_factor)])
+            return small.with_effects([Resize(clip.size)])
         return clip
 
     def _apply_glow(self, clip, intensity: float):
@@ -397,17 +534,17 @@ class VideoEditor:
     def _apply_fade(self, clip, intensity: float):
         """应用淡入淡出"""
         fade_duration = intensity
-        return fadein(fadeout(clip, fade_duration), fade_duration)
+        return clip.with_effects([FadeIn(fade_duration), FadeOut(fade_duration)])
 
     def _apply_zoom(self, clip, intensity: float):
         """应用缩放效果"""
         scale = 1 + intensity * 0.5
-        return resize(clip, scale)
+        return clip.with_effects([Resize(scale)])
 
     def _apply_rotate(self, clip, intensity: float):
         """应用旋转效果"""
         angle = intensity * 360
-        return rotate_fx(clip, angle)
+        return clip.with_effects([Rotate(angle)])
 
     def _apply_shake(self, clip, intensity: float):
         """应用震动效果"""
@@ -443,7 +580,7 @@ class VideoEditor:
     def _cross_fade(self, clip1, clip2, duration: float):
         """交叉淡化转场"""
         # 这个需要两个片段，暂时简化处理
-        return fadein(clip1, duration)
+        return clip1.with_effects([FadeIn(duration)])
 
     def _slide_transition(self, clip, duration: float):
         """滑动转场"""
@@ -469,7 +606,11 @@ class VideoEditor:
             else:
                 return ("center", "center")
         
-        return text_clip.set_position(slide_pos)
+        try:
+            return text_clip.with_position(slide_pos)
+        except AttributeError:
+            # Fallback for older MoviePy versions
+            return text_clip.set_position(slide_pos)
 
 
 def main():

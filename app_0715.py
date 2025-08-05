@@ -20,6 +20,41 @@ from threading import Condition
 # 设置日志
 logger = logging.getLogger(__name__)
 
+# ========== 重构：常量定义 ==========
+class APIConstants:
+    """API相关常量"""
+    DEFAULT_MODE = "async"
+    SYNC_MODE = "sync"
+    ASYNC_MODE = "async"
+    
+    # 状态码
+    STATUS_PENDING = "0"
+    STATUS_COMPLETED = "1"
+    STATUS_FAILED = "2"
+    
+    # 错误类型
+    ERROR_VALIDATION = "validation_error"
+    ERROR_GENERAL = "general_exception"
+    
+    # API类型
+    API_TYPE_DEFAULT = "default"
+    API_TYPE_DIGITAL_HUMAN = "digital_human"
+    
+    # 响应类型
+    RESPONSE_TYPE_VIDEO = "video"
+    RESPONSE_TYPE_IMAGE = "image"
+    RESPONSE_TYPE_TEXT = "text"
+    RESPONSE_TYPE_ANALYSIS = "analysis"
+
+class ResponseMessages:
+    """响应消息常量"""
+    VALIDATION_ERROR = "请求参数验证失败"
+    PROCESSING_ERROR = "处理失败"
+    TASK_SUBMIT_ERROR = "提交任务失败"
+    STATUS_UPDATE_ERROR = "状态更新失败"
+    FILE_NOT_FOUND = "文件不存在"
+    UPLOAD_FAILED = "上传失败"
+
 from fastapi import HTTPException, FastAPI, Request, status, Query, UploadFile, File, WebSocket
 from fastapi.exceptions import RequestValidationError, HTTPException
 from fastapi.responses import JSONResponse
@@ -255,6 +290,70 @@ def extract_warehouse_path(result):
     print(f"✅ 最终warehouse路径: {warehouse_path}")
     return warehouse_path
 
+
+# ========== 重构：通用错误处理和响应格式化 ==========
+class ResponseFormatter:
+    """统一的响应格式化器"""
+    
+    @staticmethod
+    def format_success_response(result, task_id=None, tenant_id=None, business_id=None, 
+                              processing_time=0, function_name="", response_type="video"):
+        """格式化成功响应"""
+        return {
+            "status": "completed",
+            "data": result,
+            "result_type": response_type,
+            "processing_time": processing_time,
+            "function_name": function_name,
+            "task_id": task_id,
+            "tenant_id": tenant_id,
+            "business_id": business_id
+        }
+    
+    @staticmethod
+    def format_async_response(task_id, urlpath=""):
+        """格式化异步响应"""
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "任务已提交，请使用task_id查询结果",
+            "poll_url": f"/poll-result/{task_id}",
+            "get_url": f"/get-result/{task_id}",
+            "warehouse_base_url": urlpath
+        }
+    
+    @staticmethod
+    def format_error_response(error_msg, error_type=None, task_id=None, tenant_id=None, 
+                            business_id=None, function_name="", details=None):
+        """格式化错误响应"""
+        if error_type == APIConstants.ERROR_VALIDATION:
+            first_detail = (details or [{}])[0]
+            return {
+                "status": "validation_error",
+                "error_code": 422,
+                "error": error_msg,
+                "details": {
+                    "field": first_detail.get("field", ""),
+                    "message": first_detail.get("message", "Field required"),
+                    "type": first_detail.get("type", "missing"),
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "id": business_id,
+                    "suggestion": "请参考API文档检查请求参数格式",
+                    "function_name": function_name
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "error_code": 500,
+                "error": error_msg,
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "business_id": business_id,
+                "function_name": function_name,
+                "timestamp": datetime.now().isoformat()
+            }
 
 def format_response(res, mode="sync", urlpath="", error_type=None):
     """
@@ -593,6 +692,142 @@ class APIService:
 # 创建API服务实例
 api_config = APIConfig()
 api_service = APIService(api_config)
+
+# ========== 重构：通用端点处理装饰器 ==========
+class EndpointHandler:
+    """统一的端点处理器，减少重复代码"""
+    
+    def __init__(self, api_service, task_manager=None):
+        self.api_service = api_service
+        self.task_manager = task_manager
+        self.response_formatter = ResponseFormatter()
+        
+    def create_endpoint_wrapper(self, business_func, function_name, async_func_name=None, 
+                               is_digital_human=False, response_type="video"):
+        """创建统一的端点包装器，进一步减少重复代码"""
+        
+        async def endpoint_wrapper(request):
+            """通用端点包装器"""
+            # 注册异步处理函数
+            if async_func_name:
+                globals()[async_func_name] = business_func
+            
+            # 获取模式
+            mode = getattr(request, 'mode', APIConstants.DEFAULT_MODE)
+            
+            if mode == APIConstants.SYNC_MODE:
+                return self.handle_sync_endpoint(
+                    business_func, request, function_name,
+                    is_digital_human=is_digital_human, 
+                    response_type=response_type
+                )
+            else:
+                return await self.handle_async_endpoint(
+                    request, business_func, async_func_name or function_name,
+                    mode=mode, urlpath=urlpath
+                )
+        
+        return endpoint_wrapper
+    
+    def handle_sync_endpoint(self, func, request, function_name, is_digital_human=False, response_type="video"):
+        """处理同步端点的通用逻辑"""
+        try:
+            # 提取通用参数
+            task_id = getattr(request, 'task_id', str(uuid.uuid4()))
+            tenant_id = getattr(request, 'tenant_id', None)
+            business_id = getattr(request, 'business_id', None)
+            
+            start_time = time.time()
+            
+            # 调用业务函数
+            result = func(**request.dict())
+            
+            end_time = time.time()
+            processing_time = round(end_time - start_time, 2)
+            
+            # 使用增强函数处理结果
+            enhanced_result = enhance_endpoint_result(result, function_name, request, is_digital_human=is_digital_human)
+            
+            return enhanced_result
+            
+        except Exception as e:
+            # 统一错误处理
+            error_res = {"error": str(e), "function_name": function_name}
+            return format_response(error_res, mode="sync", error_type=APIConstants.ERROR_GENERAL)
+    
+    async def handle_async_endpoint(self, request, func, function_name, mode=None, urlpath=""):
+        """处理异步端点的通用逻辑"""
+        try:
+            # 提取参数
+            task_id = getattr(request, 'task_id', str(uuid.uuid4()))
+            tenant_id = getattr(request, 'tenant_id', None)
+            business_id = getattr(request, 'business_id', None)
+            
+            # 提交异步任务
+            if self.task_manager:
+                actual_task_id = await self.task_manager.submit_task(
+                    func_name=function_name,
+                    args=request.dict(),
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                    business_id=business_id
+                )
+            else:
+                actual_task_id = task_id
+            
+            return format_response(actual_task_id, mode="async", urlpath=urlpath)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": function_name}
+            return format_response(error_res, mode="sync", error_type=APIConstants.ERROR_GENERAL)
+    
+    def unified_endpoint_handler(self, request, func, function_name, is_digital_human=False, 
+                                response_type="video", urlpath=""):
+        """统一的端点处理逻辑，自动判断同步/异步模式"""
+        mode = getattr(request, 'mode', APIConstants.DEFAULT_MODE)
+        
+        if mode == APIConstants.SYNC_MODE:
+            return self.handle_sync_endpoint(func, request, function_name, is_digital_human, response_type)
+        else:
+            return self.handle_async_endpoint(request, func, function_name, mode, urlpath)
+
+class TaskStatusManager:
+    """任务状态管理器，统一处理状态更新逻辑"""
+    
+    def __init__(self, api_service):
+        self.api_service = api_service
+    
+    def update_task_status(self, task_id, status, tenant_id=None, business_id=None, 
+                          path="", resource_id=None, content=None, api_type="default"):
+        """统一的任务状态更新"""
+        try:
+            return self.api_service.update_task_status(
+                task_id=task_id,
+                status=status,
+                tenant_id=tenant_id,
+                business_id=business_id,
+                path=path,
+                resource_id=resource_id,
+                content=content,
+                api_type=api_type
+            )
+        except Exception as e:
+            print(f"❌ [STATUS-UPDATE] 更新任务状态失败: {str(e)}")
+            return False
+    
+    def update_to_completed(self, task_id, tenant_id=None, business_id=None, path="", 
+                           resource_id=None, api_type="default"):
+        """更新任务状态为完成"""
+        return self.update_task_status(
+            task_id, APIConstants.STATUS_COMPLETED, tenant_id, business_id, 
+            path, resource_id, api_type=api_type
+        )
+    
+    def update_to_failed(self, task_id, tenant_id=None, business_id=None, api_type="default"):
+        """更新任务状态为失败"""
+        return self.update_task_status(
+            task_id, APIConstants.STATUS_FAILED, tenant_id, business_id, api_type=api_type
+        )
 
 
 class AsyncTaskManager:
@@ -971,6 +1206,10 @@ class AsyncTaskManager:
 # 创建任务管理器实例
 task_manager = AsyncTaskManager()
 
+# ========== 重构：创建管理器实例 ==========
+status_manager = TaskStatusManager(api_service)
+endpoint_handler = EndpointHandler(api_service, task_manager)
+
 
 class VideoGenerationService:
     def __init__(self):
@@ -1283,150 +1522,119 @@ def enhance_endpoint_result(result, function_name, request, is_digital_human=Fal
 
 # ========== Coze 视频生成接口 ==========
 
-@app.post("/video/advertisement")
+@app.post("/video/advertisement")  
 async def video_advertisement(request: VideoAdvertisementRequest):
-    """生成广告视频"""
-    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
-
-    if mode == "sync":
-        # 同步模式 - 保持原有逻辑
-        try:
-            result = service.video_api.generate_advertisement(
-                company_name=request.company_name,
-                service=request.service,
-                topic=request.topic,
-                content=getattr(request, 'content', ''),
-                need_change=getattr(request, 'need_change', False)
-            )
-            # 🔥 使用增强函数处理结果
-            return enhance_endpoint_result(result, "generate_advertisement", request, is_digital_human=False)
-        except Exception as e:
-            error_res = {"error": str(e), "function_name": "generate_advertisement"}
-            return format_response(error_res, mode="sync", error_type="general_exception")
-    else:
-        # 异步模式 - 提交任务并返回task_id
-        try:
-            args = {
-                "company_name": request.company_name,
-                "service": request.service,
-                "topic": request.topic,
-                "content": getattr(request, 'content', ''),
-                "need_change": getattr(request, 'need_change', False)
-            }
-
-            task_id = await task_manager.submit_task(
-                func_name="get_video_advertisement",
-                args=args,
-                tenant_id=getattr(request, 'tenant_id', None),
-                business_id=getattr(request, 'id', None)
-            )
-
-            return format_response(task_id, mode="async", urlpath=urlpath)
-        except Exception as e:
-            error_res = {"error": str(e), "function_name": "generate_advertisement"}
-            return format_response(error_res, mode="sync", error_type="general_exception")
+    """生成广告视频 - 重构版本使用统一包装器"""
+    
+    def advertisement_func(**kwargs):
+        """广告视频生成业务逻辑"""
+        return service.video_api.generate_advertisement(
+            company_name=kwargs.get('company_name'),
+            service=kwargs.get('service'),
+            topic=kwargs.get('topic'),
+            content=kwargs.get('content', ''),
+            need_change=kwargs.get('need_change', False)
+        )
+    
+    # 使用通用端点包装器
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=advertisement_func,
+        function_name="generate_advertisement",
+        async_func_name="get_video_advertisement",
+        is_digital_human=False,
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
+    )
+    
+    return await wrapper(request)
 
 
 @app.post("/video/advertisement-enhance")
 async def video_advertisement_enhance(request: VideoAdvertisementEnhanceRequest):
-    """生成增强广告视频"""
-    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
-
-    if mode == "sync":
-        # 同步模式
-        try:
-            result = service.video_api.generate_advertisement(
-                company_name=request.company_name,
-                service=request.service,
-                topic=request.topic,
+    """生成增强广告视频 - 重构版本使用统一包装器"""
+    
+    def advertisement_enhance_func(**kwargs):
+        """增强广告视频生成业务逻辑"""
+        # 根据参数数量判断使用哪个API（保持原有逻辑）
+        if len(kwargs) <= 4:
+            return service.video_api.generate_advertisement(
+                company_name=kwargs.get('company_name'),
+                service=kwargs.get('service'),
+                topic=kwargs.get('topic'),
                 enhance=True
             )
-            # 🔥 使用增强函数处理结果
-            return enhance_endpoint_result(result, "generate_advertisement_enhance", request, is_digital_human=False)
-        except Exception as e:
-            error_res = {"error": str(e), "function_name": "generate_advertisement_enhance"}
-            return format_response(error_res, mode="sync", error_type="general_exception")
-    else:
-        # 异步模式
-        try:
-            args = {
-                "company_name": request.company_name,
-                "service": request.service,
-                "topic": request.topic,
-                "content": request.content,
-                "need_change": request.need_change,
-                "add_digital_host": request.add_digital_host,
-                "use_temp_materials": request.use_temp_materials,
-                "clip_mode": request.clip_mode,
-                "upload_digital_host": request.upload_digital_host,
-                "moderator_source": request.moderator_source,
-                "enterprise_source": request.enterprise_source
-            }
-
-            task_id = await task_manager.submit_task(
-                func_name="get_video_advertisement_enhance",
-                args=args,
-                tenant_id=getattr(request, 'tenant_id', None),
-                business_id=getattr(request, 'id', None)
+        else:
+            return service.video_api.generate_advertisement_enhance(
+                company_name=kwargs.get('company_name'),
+                service=kwargs.get('service'),
+                topic=kwargs.get('topic'),
+                content=kwargs.get('content'),
+                need_change=kwargs.get('need_change'),
+                add_digital_host=kwargs.get('add_digital_host'),
+                use_temp_materials=kwargs.get('use_temp_materials'),
+                clip_mode=kwargs.get('clip_mode'),
+                upload_digital_host=kwargs.get('upload_digital_host'),
+                moderator_source=kwargs.get('moderator_source'),
+                enterprise_source=kwargs.get('enterprise_source')
             )
-
-            return format_response(task_id, mode="async", urlpath=urlpath)
-        except Exception as e:
-            error_res = {"error": str(e), "function_name": "generate_advertisement_enhance"}
-            return format_response(error_res, mode="sync", error_type="general_exception")
+    
+    # 使用通用端点包装器
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=advertisement_enhance_func,
+        function_name="generate_advertisement_enhance",
+        async_func_name="get_video_advertisement_enhance",
+        is_digital_human=False,
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
+    )
+    
+    return await wrapper(request)
 
 
 @app.post("/video/clicktype")
 async def video_clicktype(request: ClickTypeRequest):
-    """生成点击类视频"""
-    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
-
-    # 定义实际处理逻辑
-    async def process():
-        try:
-            result = service.video_api.generate_clicktype(
-                title=request.title,
-                content=request.content
-            )
-            # 🔥 使用增强函数处理结果
-            return enhance_endpoint_result(result, "generate_clicktype", request, is_digital_human=False)
-        except Exception as e:
-            error_res = {"error": str(e), "function_name": "generate_clicktype"}
-            return format_response(error_res, mode="sync", error_type="general_exception")
-
-    # 🔥 修复：显式传递参数，避免参数过滤问题
-    return await handle_async_endpoint(request, process, "generate_clicktype", 
-                                       title=request.title, 
-                                       content=request.content)
+    """生成点击类视频 - 重构版本使用统一包装器"""
+    
+    def clicktype_func(**kwargs):
+        """点击类视频生成业务逻辑"""
+        return service.video_api.generate_clicktype(
+            title=kwargs.get('title'),
+            content=kwargs.get('content')
+        )
+    
+    # 使用通用端点包装器
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=clicktype_func,
+        function_name="generate_clicktype",
+        async_func_name="get_video_clicktype",
+        is_digital_human=False,
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
+    )
+    
+    return await wrapper(request)
 
 
 @app.post("/video/digital-human-easy")
 async def video_digital_human_easy(request: DigitalHumanEasyRequest):
-    """生成数字人视频"""
-    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
-
-    # 定义实际处理逻辑
-    async def process():
-        try:
-            result = service.video_api.generate_digital_human(
-                video_input=request.file_path,  # 🔥 修正：使用file_path作为video_input
-                topic=request.topic,
-                content=getattr(request, 'content', ''),
-                audio_input=getattr(request, 'audio_url', getattr(request, 'audio_path', None))
-                # 🔥 修正：兼容audio_url和audio_path
-            )
-            # 🔥 使用增强函数处理结果（数字人专用接口）
-            return enhance_endpoint_result(result, "generate_digital_human", request, is_digital_human=True)
-        except Exception as e:
-            error_res = {"error": str(e), "function_name": "generate_digital_human"}
-            return format_response(error_res, mode="sync", error_type="general_exception")
-
-    # 🔥 修复：传递正确的参数给 handle_async_endpoint
-    return await handle_async_endpoint(
-        request,
-        process,
-        "generate_digital_human"
+    """生成数字人视频 - 重构版本使用统一包装器"""
+    
+    def digital_human_func(**kwargs):
+        """数字人视频生成业务逻辑"""
+        return service.video_api.generate_digital_human(
+            video_input=kwargs.get('file_path'),  # 使用file_path作为video_input
+            topic=kwargs.get('topic'),
+            content=kwargs.get('content', ''),
+            audio_input=kwargs.get('audio_url') or kwargs.get('audio_path')  # 兼容audio_url和audio_path
+        )
+    
+    # 使用通用端点包装器 - 数字人专用接口
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=digital_human_func,
+        function_name="generate_digital_human",
+        async_func_name="get_video_digital_human",
+        is_digital_human=True,  # 数字人专用
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
     )
+    
+    return await wrapper(request)
 
 
 @app.post("/video/clothes-different-scene")
