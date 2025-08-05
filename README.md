@@ -2,6 +2,15 @@
 
 一个基于人工智能的自动视频剪辑系统，能够自动分析视频内容并根据用户需求生成编辑后的视频。
 
+## 📚 文档
+
+- [API文档](docs/API.md) - 完整的API接口说明
+- [前端接口指南](docs/FRONTEND_API.md) - 前端集成指南
+- [架构设计](docs/ARCHITECTURE.md) - 系统架构设计文档
+- [快速入门](docs/QUICK_START.md) - 快速上手指南
+- [自然语言编辑](docs/NL_VIDEO_EDIT.md) - 自然语言视频编辑功能
+- [MCP服务](docs/MCP_SERVICE.md) - Model Context Protocol服务说明
+
 ## 功能特性
 
 - 🎬 **视频自动分析**：使用CV和ML模型分析视频内容
