@@ -10,11 +10,10 @@ video_path = "03.mp4"  # 替换为你的视频文件路径
 # video_url = get_online_url(video_path)  # 上传视频并获取公网URL
 audio_url = "https://lf-bot-studio-plugin-resource.coze.cn/obj/bot-studio-platform-plugin-tos/artist/image/29bf1e90a1db4c21ac7f1ef52296f0ea.mp3"
 
-# 替换为你的 API 密钥
+# 从文件获取 API 密钥
 API_KEY = get_api_key_from_file()
-print(API_KEY)
 if not API_KEY:
-    raise Exception("请设置DASHSCOPE_API_KEY环境变量")
+    raise ValueError("API Key 未配置，请设置 DASHSCOPE_API_KEY 环境变量或检查 api_key.txt 文件")
 
 
 def get_insert_videotalk_task(video_url, audio_url):

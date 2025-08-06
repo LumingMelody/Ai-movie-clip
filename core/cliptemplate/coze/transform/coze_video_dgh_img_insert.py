@@ -351,11 +351,22 @@ def create_subtitles_clips(text_list, durations, fontsize=40, font='江西拙楷
                            stroke_color='black'):
     """创建字幕剪辑列表"""
     clips = []
+    
+    # 获取项目根目录的字体文件路径
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
+    font_path = os.path.join(project_root, '微软雅黑.ttf')
+    
+    # 字体优先级：项目字体 -> 系统中文字体 -> Arial
+    if os.path.exists(font_path):
+        font_to_use = font_path
+    else:
+        font_to_use = 'Arial-Unicode-MS'  # macOS 系统中文字体
+    
     for i, text in enumerate(text_list):
         start, end = durations[i]
         txt_clip = TextClip(
-            font,
-            text,
+            text=text,  # 🔥 修复：text 参数在前
+            font=font_to_use,  # 🔥 修复：使用正确的字体路径
             font_size=fontsize,
             color=color,
             stroke_color=stroke_color,
@@ -370,9 +381,20 @@ def create_subtitles_clips(text_list, durations, fontsize=40, font='江西拙楷
 def create_title_clip(title, duration, fontsize=140, font='江西拙楷2.0.ttf', color='Yellow', stroke_color='black',
                       bg_color=(0, 0, 0, 30)):
     """创建标题剪辑"""
+    
+    # 获取项目根目录的字体文件路径
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))
+    font_path = os.path.join(project_root, '微软雅黑.ttf')
+    
+    # 字体优先级：项目字体 -> 系统中文字体 -> Arial
+    if os.path.exists(font_path):
+        font_to_use = font_path
+    else:
+        font_to_use = 'Arial-Unicode-MS'  # macOS 系统中文字体
+    
     return TextClip(
-        font,
-        title,
+        text=title,  # 🔥 修复：text 参数在前
+        font=font_to_use,  # 🔥 修复：使用正确的字体路径
         font_size=fontsize,
         stroke_color=stroke_color,
         stroke_width=5,

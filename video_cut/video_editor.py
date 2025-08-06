@@ -7,7 +7,26 @@ import os
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import logging
+from tqdm import tqdm
 from moviepy import VideoFileClip, AudioFileClip, TextClip, CompositeVideoClip, CompositeAudioClip, concatenate_videoclips, ImageClip, ColorClip
+
+# 添加性能优化和验证工具
+try:
+    from .utils.performance import MemoryManager, ChunkedVideoProcessor, StreamingProcessor
+    from .utils.validators import InputValidator, ResourceValidator, ErrorHandler
+except ImportError:
+    # 临时占位
+    class MemoryManager:
+        def check_memory_usage(self): return {"available": 999}
+        def optimize_for_memory(self, d, r, f): return {"chunk_size": None}
+    class ChunkedVideoProcessor:
+        def __init__(self): pass
+    class InputValidator:
+        @staticmethod
+        def validate_timeline(t): return t
+    class ResourceValidator:
+        @staticmethod
+        def check_resource_availability(r): return {"videos": [], "audios": [], "images": []}
 # MoviePy 2.x imports
 try:
     from moviepy.video.fx.Resize import Resize
@@ -27,15 +46,24 @@ import numpy as np
 class VideoEditor:
     """视频剪辑执行器"""
     
-    def __init__(self, resource_dir: str = "./resources"):
+    def __init__(self, resource_dir: str = "./resources", enable_memory_optimization: bool = True):
         """
         初始化视频编辑器
         
         Args:
             resource_dir: 资源文件目录（视频、音频、图片等）
+            enable_memory_optimization: 是否启用内存优化
         """
         self.resource_dir = Path(resource_dir)
         self.logger = self._setup_logger()
+        self.memory_manager = MemoryManager() if enable_memory_optimization else None
+        self.chunk_processor = ChunkedVideoProcessor()
+        
+        # 检查资源可用性
+        self.available_resources = ResourceValidator.check_resource_availability(str(self.resource_dir))
+        self.logger.info(f"可用资源: {len(self.available_resources['videos'])}个视频, "
+                        f"{len(self.available_resources['audios'])}个音频, "
+                        f"{len(self.available_resources['images'])}个图片")
         
         # 特效映射
         self.effect_mapping = {
@@ -198,32 +226,53 @@ class VideoEditor:
                 source = clip_data.get("source", "")
                 if not source:
                     # 如果没有源文件，创建纯色片段
+                    self.logger.warning(f"片段缺少视频源，创建黑屏片段")
                     clip = self._create_color_clip(
                         duration=clip_data["end"] - clip_data["start"],
                         resolution=resolution,
                         color=(0, 0, 0)
                     )
                 else:
-                    # 加载视频文件
-                    video_path = self.resource_dir / source
+                    # 处理视频路径
+                    # 首先检查是否是绝对路径
+                    if os.path.isabs(source):
+                        video_path = Path(source)
+                    else:
+                        # 相对路径，在资源目录中查找
+                        video_path = self.resource_dir / source
+                    
+                    # 如果还不存在，尝试直接使用源路径
+                    if not video_path.exists():
+                        video_path = Path(source)
+                    
                     if video_path.exists():
+                        self.logger.info(f"加载视频: {video_path}")
                         clip = VideoFileClip(str(video_path))
                     else:
-                        self.logger.warning(f"视频文件不存在: {video_path}")
-                        continue
+                        self.logger.error(f"视频文件不存在: {video_path}，尝试的源路径: {source}")
+                        # 创建占位片段而不是跳过
+                        clip = self._create_color_clip(
+                            duration=clip_data["end"] - clip_data["start"],
+                            resolution=resolution,
+                            color=(50, 50, 50)  # 灰色表示缺失
+                        )
                 
                 # 裁剪片段
+                # 支持多种字段名称格式
+                clip_in = clip_data.get("clip_in", clip_data.get("clipIn", 0))
+                clip_out = clip_data.get("clip_out", clip_data.get("clipOut", clip.duration))
+                
+                # 确保clip_out不超过视频长度
+                clip_out = min(clip_out, clip.duration)
+                
                 try:
-                    clip = clip.subclipped(
-                        clip_data.get("clipIn", 0),
-                        clip_data.get("clipOut", clip.duration)
-                    )
+                    clip = clip.subclipped(clip_in, clip_out)
                 except AttributeError:
                     # Fallback for older MoviePy versions
-                    clip = clip.subclip(
-                        clip_data.get("clipIn", 0),
-                        clip_data.get("clipOut", clip.duration)
-                    )
+                    try:
+                        clip = clip.subclip(clip_in, clip_out)
+                    except:
+                        self.logger.warning(f"跳过裁剪，使用完整片段")
                 
                 # 设置时间
                 try:

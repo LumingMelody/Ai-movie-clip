@@ -2,13 +2,33 @@
 自然语言视频剪辑主程序
 整合所有组件，提供完整的自然语言到视频剪辑的流程
 """
+from typing import Dict
+
 import click
 import json
 import os
 from pathlib import Path
-from natural_language_processor import NaturalLanguageProcessor
-from timeline_generator import TimelineGenerator
-from video_editor import VideoEditor
+from tqdm import tqdm
+import time
+
+from video_cut.timeline_generator import TimelineGenerator
+# 使用统一的处理器
+
+
+
+from video_cut.unified_nl_processor import NaturalLanguageProcessor
+from video_cut.video_editor import VideoEditor
+
+# 导入验证和错误处理
+try:
+    from utils.validators import InputValidator, ErrorHandler
+except ImportError:
+    class InputValidator:
+        @staticmethod
+        def validate_natural_language(t): return t
+    class ErrorHandler:
+        @staticmethod
+        def handle_api_error(e, f=None): return {"error": str(e)}
 
 
 @click.group()
@@ -23,7 +43,8 @@ def cli():
 @click.option('--output-json', '-o', default='output/generated_timeline.json', help='输出时间轴JSON路径')
 @click.option('--template', '-p', type=click.Choice(['vlog', 'product', 'education', 'commercial', 'social_media', 'custom']), 
               default='custom', help='视频模板类型')
-def generate(text, input_file, output_json, template):
+@click.option('--verbose', '-v', is_flag=True, help='显示详细信息')
+def generate(text, input_file, output_json, template, verbose):
     """从自然语言生成视频时间轴"""
     
     # 获取输入文本
@@ -33,16 +54,34 @@ def generate(text, input_file, output_json, template):
         with open(input_file, 'r', encoding='utf-8') as f:
             user_input = f.read()
     else:
-        click.echo("请提供文本描述（--text）或输入文件（--input-file）")
+        click.echo(click.style("❌ 错误：请提供文本描述（--text）或输入文件（--input-file）", fg='red'))
         return
     
-    click.echo("正在处理自然语言描述...")
+    try:
+        # 验证输入
+        user_input = InputValidator.validate_natural_language(user_input)
+    except ValueError as e:
+        click.echo(click.style(f"❌ 输入验证失败: {e}", fg='red'))
+        return
     
-    # 创建处理器
-    nl_processor = NaturalLanguageProcessor()
-    
-    # 处理自然语言
-    timeline_json = nl_processor.process_natural_language(user_input)
+    # 创建进度条
+    with tqdm(total=3, desc="生成时间轴") as pbar:
+        
+        # 步骤1: 处理自然语言
+        pbar.set_description("处理自然语言")
+        nl_processor = NaturalLanguageProcessor()
+        
+        try:
+            timeline_json = nl_processor.process_natural_language(user_input)
+            pbar.update(1)
+        except Exception as e:
+            error_info = ErrorHandler.handle_api_error(e)
+            click.echo(click.style(f"\n❌ {error_info['error']}: {error_info['message']}", fg='red'))
+            if error_info.get('fallback'):
+                click.echo(click.style("使用备用方案...", fg='yellow'))
+                timeline_json = error_info['fallback']
+            else:
+                return
     
     # 如果需要使用高级生成器进一步优化
     if template != 'custom':

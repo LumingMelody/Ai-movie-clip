@@ -100,7 +100,7 @@ def add_subtitle(clip, subtitle_data):
         color=subtitle_data["style"]["color"].lstrip("#"),
         bg_color=subtitle_data["style"]["background_color"].lstrip("#")
     )
-    txt_clip = txt_clip.set_position((subtitle_data["position"]["x"], subtitle_data["position"]["y"]))
-    txt_clip = txt_clip.set_duration(subtitle_data["end_time"] - subtitle_data["start_time"])
-    txt_clip = txt_clip.set_start(subtitle_data["start_time"])
+    txt_clip = txt_clip.with_position((subtitle_data["position"]["x"], subtitle_data["position"]["y"]))
+    txt_clip = txt_clip.with_duration(subtitle_data["end_time"] - subtitle_data["start_time"])
+    txt_clip = txt_clip.with_start(subtitle_data["start_time"])
     return CompositeVideoClip([clip, txt_clip])

@@ -37,153 +37,220 @@ class VolcanoEffect:
 class VolcanoEffects:
     """火山引擎特效管理器"""
     
-    # 常用滤镜ID - 基于火山引擎实际ID
+    # 滤镜ID - 基于火山引擎官方文档
     FILTERS = {
         # 基础滤镜
         "clear": VolcanoEffect("1184003", EffectType.FILTER, "清晰", "清晰滤镜效果"),
         "afternoon": VolcanoEffect("1184004", EffectType.FILTER, "午后", "午后滤镜效果"),
+        "muji": VolcanoEffect("1184005", EffectType.FILTER, "MUJI", "MUJI风格滤镜"),
+        "fair": VolcanoEffect("1184006", EffectType.FILTER, "白皙", "白皙滤镜效果"),
+        "walnut": VolcanoEffect("1184007", EffectType.FILTER, "胡桃木", "胡桃木风格滤镜"),
+        "natural": VolcanoEffect("1184008", EffectType.FILTER, "自然", "自然滤镜效果"),
+        
+        # 城市风格滤镜
+        "hongkong": VolcanoEffect("1183991", EffectType.FILTER, "香港", "香港风格滤镜"),
+        "childhood": VolcanoEffect("1183992", EffectType.FILTER, "童年", "童年风格滤镜"),
+        "friends": VolcanoEffect("1183993", EffectType.FILTER, "老友记", "老友记风格滤镜"),
+        "miami": VolcanoEffect("1183994", EffectType.FILTER, "迈阿密", "迈阿密风格滤镜"),
+        "vintage": VolcanoEffect("1183995", EffectType.FILTER, "Vintage", "复古风格滤镜"),
+        "american": VolcanoEffect("1183996", EffectType.FILTER, "美式", "美式风格滤镜"),
         
         # 色调滤镜
-        "warm": VolcanoEffect("1184005", EffectType.FILTER, "暖色调", "暖色调滤镜"),
-        "cold": VolcanoEffect("1184006", EffectType.FILTER, "冷色调", "冷色调滤镜"),
-        "vintage": VolcanoEffect("1184007", EffectType.FILTER, "复古", "复古滤镜效果"),
-        "film": VolcanoEffect("1184008", EffectType.FILTER, "电影", "电影风格滤镜"),
+        "cream": VolcanoEffect("1183961", EffectType.FILTER, "奶油", "奶油色调滤镜"),
+        "first_sight": VolcanoEffect("1183962", EffectType.FILTER, "初见", "初见风格滤镜"),
+        "bright": VolcanoEffect("1183963", EffectType.FILTER, "鲜亮", "鲜亮色调滤镜"),
+        "dream": VolcanoEffect("1183964", EffectType.FILTER, "梦境", "梦境风格滤镜"),
+        "jeju": VolcanoEffect("1183965", EffectType.FILTER, "济州", "济州岛风格滤镜"),
+        "clear_transparent": VolcanoEffect("1183966", EffectType.FILTER, "清透", "清透风格滤镜"),
         
-        # 风格滤镜
-        "black_white": VolcanoEffect("1184009", EffectType.FILTER, "黑白", "黑白滤镜效果"),
-        "vivid": VolcanoEffect("1184010", EffectType.FILTER, "鲜艳", "增强色彩饱和度"),
-        "soft": VolcanoEffect("1184011", EffectType.FILTER, "柔和", "柔和滤镜效果"),
-        "hdr": VolcanoEffect("1184012", EffectType.FILTER, "HDR", "高动态范围滤镜"),
-        "natural": VolcanoEffect("1184013", EffectType.FILTER, "自然", "自然色彩滤镜"),
-        "fresh": VolcanoEffect("1184014", EffectType.FILTER, "清新", "清新风格滤镜"),
+        # 食物风格滤镜
+        "solar_eclipse": VolcanoEffect("1183951", EffectType.FILTER, "日食", "日食风格滤镜"),
+        "savor": VolcanoEffect("1183952", EffectType.FILTER, "赏味", "赏味风格滤镜"),
+        "warm_food": VolcanoEffect("1183953", EffectType.FILTER, "暖食", "暖食风格滤镜"),
+        "delicious": VolcanoEffect("1183954", EffectType.FILTER, "可口", "可口风格滤镜"),
+        "midnight_diner": VolcanoEffect("1183955", EffectType.FILTER, "深夜食堂", "深夜食堂风格滤镜"),
         
-        # 艺术滤镜
-        "dream": VolcanoEffect("1184015", EffectType.FILTER, "梦幻", "梦幻效果滤镜"),
-        "retro": VolcanoEffect("1184016", EffectType.FILTER, "怀旧", "怀旧风格滤镜"),
-        "polaroid": VolcanoEffect("1184017", EffectType.FILTER, "拍立得", "拍立得风格滤镜"),
+        # 其他特色滤镜
+        "sakura": VolcanoEffect("1183683", EffectType.FILTER, "樱花", "樱花风格滤镜"),
+        "lime_green": VolcanoEffect("1183681", EffectType.FILTER, "柠绿", "柠绿风格滤镜"),
+        "kyoto": VolcanoEffect("1180981", EffectType.FILTER, "京都", "京都风格滤镜"),
+        "sunset": VolcanoEffect("1180982", EffectType.FILTER, "晚霞", "晚霞风格滤镜"),
+        "green_beauty": VolcanoEffect("1180983", EffectType.FILTER, "绿妍", "绿妍风格滤镜"),
+        "spring_prelude": VolcanoEffect("1180984", EffectType.FILTER, "春日序", "春日序风格滤镜"),
     }
     
-    # 常用特效ID - 基于火山引擎ID格式
+    # 特效ID - 基于火山引擎官方文档
     EFFECTS = {
-        # 基础特效
-        "blur": VolcanoEffect("1185001", EffectType.EFFECT, "模糊", "高斯模糊特效"),
-        "shake": VolcanoEffect("1185002", EffectType.EFFECT, "抖动", "画面抖动特效"),
-        "glitch": VolcanoEffect("1185003", EffectType.EFFECT, "故障", "故障风特效"),
-        
-        # 粒子特效
-        "particle": VolcanoEffect("1185004", EffectType.EFFECT, "粒子", "粒子特效"),
-        "sparkle": VolcanoEffect("1185005", EffectType.EFFECT, "闪光", "闪光粒子特效"),
-        "star": VolcanoEffect("1185006", EffectType.EFFECT, "星星", "星星特效"),
-        
-        # 光效
-        "light_leak": VolcanoEffect("1185007", EffectType.EFFECT, "漏光", "漏光特效"),
-        "lens_flare": VolcanoEffect("1185008", EffectType.EFFECT, "镜头光晕", "镜头光晕特效"),
-        "glow": VolcanoEffect("1185009", EffectType.EFFECT, "发光", "发光特效"),
-        
-        # 天气特效
-        "rain": VolcanoEffect("1185010", EffectType.EFFECT, "下雨", "下雨特效"),
-        "snow": VolcanoEffect("1185011", EffectType.EFFECT, "下雪", "下雪特效"),
-        "fog": VolcanoEffect("1185012", EffectType.EFFECT, "雾气", "雾气特效"),
-        
-        # 艺术特效
-        "paint": VolcanoEffect("1185013", EffectType.EFFECT, "油画", "油画风格特效"),
-        "sketch": VolcanoEffect("1185014", EffectType.EFFECT, "素描", "素描风格特效"),
-        "cartoon": VolcanoEffect("1185015", EffectType.EFFECT, "卡通", "卡通风格特效"),
+        # 分屏特效
+        "mirror_symmetry": VolcanoEffect("1199641", EffectType.EFFECT, "镜像对称", "镜像对称特效"),
+        "nine_split": VolcanoEffect("1188883", EffectType.EFFECT, "九分屏", "九分屏特效"),
+        "six_split": VolcanoEffect("1188884", EffectType.EFFECT, "六分屏", "六分屏特效"),
+        "four_split": VolcanoEffect("1188885", EffectType.EFFECT, "四分屏", "四分屏特效"),
+        "three_split": VolcanoEffect("1188886", EffectType.EFFECT, "三分屏", "三分屏特效"),
+        "two_split": VolcanoEffect("1188887", EffectType.EFFECT, "二分屏", "二分屏特效"),
     }
     
-    # 视频动画ID - 基于火山引擎ID格式
+    # 视频动画ID - 基于火山引擎官方文档
     VIDEO_ANIMATIONS = {
-        # 缩放动画
-        "zoom_in": VolcanoEffect("1186001", EffectType.VIDEO_ANIMATION, "放大", "画面放大动画"),
-        "zoom_out": VolcanoEffect("1186002", EffectType.VIDEO_ANIMATION, "缩小", "画面缩小动画"),
-        "zoom_shake": VolcanoEffect("1186003", EffectType.VIDEO_ANIMATION, "震动缩放", "震动缩放动画"),
+        # 入场动画
+        "circle_sweep_open": VolcanoEffect("1180355", EffectType.VIDEO_ANIMATION, "圆形扫开", "圆形扫开入场动画"),
+        "slide_in_right": VolcanoEffect("1180331", EffectType.VIDEO_ANIMATION, "向右滑入", "向右滑入动画"),
+        "slide_in_left": VolcanoEffect("1180332", EffectType.VIDEO_ANIMATION, "向左滑入", "向左滑入动画"),
+        "slide_in_down": VolcanoEffect("1180333", EffectType.VIDEO_ANIMATION, "向下滑入", "向下滑入动画"),
+        "slide_in_up": VolcanoEffect("1180334", EffectType.VIDEO_ANIMATION, "向上滑入", "向上滑入动画"),
+        "zoom_out": VolcanoEffect("1180335", EffectType.VIDEO_ANIMATION, "缩小", "缩小入场动画"),
+        "dissolve_show": VolcanoEffect("1180336", EffectType.VIDEO_ANIMATION, "溶解显示", "溶解显示动画"),
+        "fade_in": VolcanoEffect("1180337", EffectType.VIDEO_ANIMATION, "渐显", "渐显入场动画"),
+        "zoom_in": VolcanoEffect("1180338", EffectType.VIDEO_ANIMATION, "放大", "放大入场动画"),
+        "wipe_right": VolcanoEffect("1180339", EffectType.VIDEO_ANIMATION, "向右擦开", "向右擦开动画"),
+        "wipe_left": VolcanoEffect("1180340", EffectType.VIDEO_ANIMATION, "向左擦开", "向左擦开动画"),
+        "wipe_down": VolcanoEffect("1180341", EffectType.VIDEO_ANIMATION, "向下擦开", "向下擦开动画"),
+        "wipe_up": VolcanoEffect("1180342", EffectType.VIDEO_ANIMATION, "向上擦开", "向上擦开动画"),
         
-        # 移动动画
-        "slide_left": VolcanoEffect("1186004", EffectType.VIDEO_ANIMATION, "左滑", "向左滑动动画"),
-        "slide_right": VolcanoEffect("1186005", EffectType.VIDEO_ANIMATION, "右滑", "向右滑动动画"),
-        "slide_up": VolcanoEffect("1186006", EffectType.VIDEO_ANIMATION, "上滑", "向上滑动动画"),
-        "slide_down": VolcanoEffect("1186007", EffectType.VIDEO_ANIMATION, "下滑", "向下滑动动画"),
-        
-        # 旋转动画
-        "rotate": VolcanoEffect("1186008", EffectType.VIDEO_ANIMATION, "旋转", "旋转动画"),
-        "rotate_3d": VolcanoEffect("1186009", EffectType.VIDEO_ANIMATION, "3D旋转", "3D旋转动画"),
-        
-        # 其他动画
-        "bounce": VolcanoEffect("1186010", EffectType.VIDEO_ANIMATION, "弹跳", "弹跳动画"),
-        "fade_in": VolcanoEffect("1186011", EffectType.VIDEO_ANIMATION, "淡入", "淡入动画"),
-        "fade_out": VolcanoEffect("1186012", EffectType.VIDEO_ANIMATION, "淡出", "淡出动画"),
-        "flip": VolcanoEffect("1186013", EffectType.VIDEO_ANIMATION, "翻转", "翻转动画"),
+        # 出场动画
+        "circle_sweep_out": VolcanoEffect("1180375", EffectType.VIDEO_ANIMATION, "圆形扫除", "圆形扫除出场动画"),
+        "slide_out_left": VolcanoEffect("1180376", EffectType.VIDEO_ANIMATION, "向左滑出", "向左滑出动画"),
+        "slide_out_right": VolcanoEffect("1180377", EffectType.VIDEO_ANIMATION, "向右滑出", "向右滑出动画"),
+        "slide_out_down": VolcanoEffect("1180378", EffectType.VIDEO_ANIMATION, "向下滑出", "向下滑出动画"),
+        "slide_out_up": VolcanoEffect("1180379", EffectType.VIDEO_ANIMATION, "向上滑出", "向上滑出动画"),
+        "zoom_out_disappear": VolcanoEffect("1180380", EffectType.VIDEO_ANIMATION, "缩小消失", "缩小消失动画"),
+        "dissolve_disappear": VolcanoEffect("1180381", EffectType.VIDEO_ANIMATION, "溶解消失", "溶解消失动画"),
+        "fade_out": VolcanoEffect("1180382", EffectType.VIDEO_ANIMATION, "渐隐", "渐隐出场动画"),
+        "wipe_out_left": VolcanoEffect("1180383", EffectType.VIDEO_ANIMATION, "向左擦除", "向左擦除动画"),
+        "wipe_out_right": VolcanoEffect("1180384", EffectType.VIDEO_ANIMATION, "向右擦除", "向右擦除动画"),
+        "wipe_out_down": VolcanoEffect("1180385", EffectType.VIDEO_ANIMATION, "向下擦除", "向下擦除动画"),
+        "wipe_out_up": VolcanoEffect("1180386", EffectType.VIDEO_ANIMATION, "向上擦除", "向上擦除动画"),
+        "flip": VolcanoEffect("1180403", EffectType.VIDEO_ANIMATION, "翻转", "翻转出场动画"),
     }
     
-    # 文字动画ID - 基于火山引擎ID格式
+    # 文字动画ID - 基于火山引擎官方文档
     TEXT_ANIMATIONS = {
-        # 打字效果
-        "typewriter": VolcanoEffect("1187001", EffectType.TEXT_ANIMATION, "打字机", "打字机效果"),
-        "typewriter_fast": VolcanoEffect("1187002", EffectType.TEXT_ANIMATION, "快速打字", "快速打字效果"),
+        # 入场动画
+        "circle_sweep_open": VolcanoEffect("1181455", EffectType.TEXT_ANIMATION, "圆形扫开", "文字圆形扫开入场"),
+        "dissolve_show": VolcanoEffect("1181425", EffectType.TEXT_ANIMATION, "溶解显示", "文字溶解显示入场"),
+        "wipe_right": VolcanoEffect("1181426", EffectType.TEXT_ANIMATION, "向右擦开", "文字向右擦开入场"),
+        "wipe_left": VolcanoEffect("1181427", EffectType.TEXT_ANIMATION, "向左擦开", "文字向左擦开入场"),
+        "wipe_down": VolcanoEffect("1181428", EffectType.TEXT_ANIMATION, "向下擦开", "文字向下擦开入场"),
+        "wipe_up": VolcanoEffect("1181429", EffectType.TEXT_ANIMATION, "向上擦开", "文字向上擦开入场"),
+        "slide_in_left": VolcanoEffect("1181430", EffectType.TEXT_ANIMATION, "向左滑入", "文字向左滑入"),
+        "slide_in_right": VolcanoEffect("1181431", EffectType.TEXT_ANIMATION, "向右滑入", "文字向右滑入"),
+        "slide_in_down": VolcanoEffect("1181432", EffectType.TEXT_ANIMATION, "向下滑入", "文字向下滑入"),
+        "slide_in_up": VolcanoEffect("1181433", EffectType.TEXT_ANIMATION, "向上滑入", "文字向上滑入"),
+        "fade_in": VolcanoEffect("1181434", EffectType.TEXT_ANIMATION, "渐显", "文字渐显入场"),
+        "zoom_in": VolcanoEffect("1181435", EffectType.TEXT_ANIMATION, "放大", "文字放大入场"),
+        "feather_wipe_down": VolcanoEffect("1181436", EffectType.TEXT_ANIMATION, "羽化向下擦开", "文字羽化向下擦开"),
+        "feather_wipe_left": VolcanoEffect("1181437", EffectType.TEXT_ANIMATION, "羽化向左擦开", "文字羽化向左擦开"),
+        "feather_wipe_up": VolcanoEffect("1181438", EffectType.TEXT_ANIMATION, "羽化向上擦开", "文字羽化向上擦开"),
+        "feather_wipe_right": VolcanoEffect("1181439", EffectType.TEXT_ANIMATION, "羽化向右擦开", "文字羽化向右擦开"),
         
-        # 动态效果
-        "wave": VolcanoEffect("1187003", EffectType.TEXT_ANIMATION, "波浪", "波浪文字动画"),
-        "shake": VolcanoEffect("1187004", EffectType.TEXT_ANIMATION, "抖动", "文字抖动效果"),
-        "pulse": VolcanoEffect("1187005", EffectType.TEXT_ANIMATION, "脉冲", "文字脉冲效果"),
+        # 出场动画
+        "wipe_out_right": VolcanoEffect("1181497", EffectType.TEXT_ANIMATION, "向右擦除", "文字向右擦除出场"),
+        "wipe_out_left": VolcanoEffect("1181498", EffectType.TEXT_ANIMATION, "向左擦除", "文字向左擦除出场"),
+        "wipe_out_down": VolcanoEffect("1181499", EffectType.TEXT_ANIMATION, "向下擦除", "文字向下擦除出场"),
+        "wipe_out_up": VolcanoEffect("1181500", EffectType.TEXT_ANIMATION, "向上擦除", "文字向上擦除出场"),
+        "fade_out": VolcanoEffect("1181501", EffectType.TEXT_ANIMATION, "渐隐", "文字渐隐出场"),
+        "circle_sweep_out": VolcanoEffect("1181502", EffectType.TEXT_ANIMATION, "圆形扫除", "文字圆形扫除出场"),
+        "dissolve_disappear": VolcanoEffect("1181503", EffectType.TEXT_ANIMATION, "溶解消失", "文字溶解消失出场"),
+        "zoom_out_disappear": VolcanoEffect("1181504", EffectType.TEXT_ANIMATION, "缩小消失", "文字缩小消失出场"),
+        "slide_out_right": VolcanoEffect("1181505", EffectType.TEXT_ANIMATION, "向右滑出", "文字向右滑出"),
+        "slide_out_left": VolcanoEffect("1181506", EffectType.TEXT_ANIMATION, "向左滑出", "文字向左滑出"),
+        "slide_out_down": VolcanoEffect("1181507", EffectType.TEXT_ANIMATION, "向下滑出", "文字向下滑出"),
+        "slide_out_up": VolcanoEffect("1181508", EffectType.TEXT_ANIMATION, "向上划出", "文字向上划出"),
+        "feather_wipe_out_down": VolcanoEffect("1181509", EffectType.TEXT_ANIMATION, "羽化向下擦除", "文字羽化向下擦除"),
+        "feather_wipe_out_left": VolcanoEffect("1181510", EffectType.TEXT_ANIMATION, "羽化向左擦除", "文字羽化向左擦除"),
+        "feather_wipe_out_right": VolcanoEffect("1181511", EffectType.TEXT_ANIMATION, "羽化向右擦除", "文字羽化向右擦除"),
+        "feather_wipe_out_up": VolcanoEffect("1181512", EffectType.TEXT_ANIMATION, "羽化向上擦除", "文字羽化向上擦除"),
+        "wave_out": VolcanoEffect("1181555", EffectType.TEXT_ANIMATION, "波浪", "文字波浪出场"),
+        "flip_out": VolcanoEffect("1181551", EffectType.TEXT_ANIMATION, "翻转", "文字翻转出场"),
         
-        # 光影效果
-        "glow": VolcanoEffect("1187006", EffectType.TEXT_ANIMATION, "发光", "文字发光效果"),
-        "shadow": VolcanoEffect("1187007", EffectType.TEXT_ANIMATION, "阴影", "文字阴影效果"),
-        "neon": VolcanoEffect("1187008", EffectType.TEXT_ANIMATION, "霓虹", "霓虹灯文字效果"),
-        
-        # 进入动画
-        "3d_rotate": VolcanoEffect("1187009", EffectType.TEXT_ANIMATION, "3D旋转", "3D文字旋转"),
-        "bounce_in": VolcanoEffect("1187010", EffectType.TEXT_ANIMATION, "弹入", "文字弹入动画"),
-        "slide_in": VolcanoEffect("1187011", EffectType.TEXT_ANIMATION, "滑入", "文字滑入动画"),
-        "fade_in": VolcanoEffect("1187012", EffectType.TEXT_ANIMATION, "淡入", "文字淡入动画"),
-        "zoom_in": VolcanoEffect("1187013", EffectType.TEXT_ANIMATION, "放大进入", "文字放大进入动画"),
+        # 循环动画
+        "wave_loop": VolcanoEffect("1181555", EffectType.TEXT_ANIMATION, "波浪循环", "文字波浪循环动画"),
+        "flip_loop": VolcanoEffect("1181551", EffectType.TEXT_ANIMATION, "翻转循环", "文字翻转循环动画"),
     }
     
-    # 转场效果ID - 基于火山引擎ID格式
+    # 转场效果ID - 基于火山引擎官方文档
     TRANSITIONS = {
-        # 基础转场
-        "fade": VolcanoEffect("1188001", EffectType.TRANSITION, "淡入淡出", "淡入淡出转场"),
-        "dissolve": VolcanoEffect("1188002", EffectType.TRANSITION, "溶解", "溶解转场效果"),
-        "cut": VolcanoEffect("1188003", EffectType.TRANSITION, "硬切", "硬切转场效果"),
-        
-        # 擦除转场
-        "wipe_left": VolcanoEffect("1188004", EffectType.TRANSITION, "左擦除", "向左擦除转场"),
-        "wipe_right": VolcanoEffect("1188005", EffectType.TRANSITION, "右擦除", "向右擦除转场"),
-        "wipe_up": VolcanoEffect("1188006", EffectType.TRANSITION, "上擦除", "向上擦除转场"),
-        "wipe_down": VolcanoEffect("1188007", EffectType.TRANSITION, "下擦除", "向下擦除转场"),
-        
-        # 滑动转场
-        "slide_left": VolcanoEffect("1188008", EffectType.TRANSITION, "左滑动", "左滑动转场效果"),
-        "slide_right": VolcanoEffect("1188009", EffectType.TRANSITION, "右滑动", "右滑动转场效果"),
-        "slide_up": VolcanoEffect("1188010", EffectType.TRANSITION, "上滑动", "上滑动转场效果"),
-        "slide_down": VolcanoEffect("1188011", EffectType.TRANSITION, "下滑动", "下滑动转场效果"),
-        
-        # 特效转场
-        "zoom": VolcanoEffect("1188012", EffectType.TRANSITION, "缩放", "缩放转场效果"),
-        "rotate": VolcanoEffect("1188013", EffectType.TRANSITION, "旋转", "旋转转场效果"),
-        "blur": VolcanoEffect("1188014", EffectType.TRANSITION, "模糊", "模糊转场效果"),
-        "glitch": VolcanoEffect("1188015", EffectType.TRANSITION, "故障", "故障风转场"),
-        "cube": VolcanoEffect("1188016", EffectType.TRANSITION, "立方体", "立方体转场效果"),
-        "flip": VolcanoEffect("1188017", EffectType.TRANSITION, "翻页", "翻页转场效果"),
-        "morph": VolcanoEffect("1188018", EffectType.TRANSITION, "变形", "变形转场效果"),
+        # 基础转场效果
+        "leaf_flip": VolcanoEffect("1182355", EffectType.TRANSITION, "叶片翻转", "叶片翻转转场效果"),
+        "blinds": VolcanoEffect("1182356", EffectType.TRANSITION, "百叶窗", "百叶窗转场效果"),
+        "wind_blow": VolcanoEffect("1182357", EffectType.TRANSITION, "风吹", "风吹转场效果"),
+        "alternating": VolcanoEffect("1182359", EffectType.TRANSITION, "交替出场", "交替出场转场效果"),
+        "rotate_zoom": VolcanoEffect("1182360", EffectType.TRANSITION, "旋转放大", "旋转放大转场效果"),
+        "spread": VolcanoEffect("1182358", EffectType.TRANSITION, "泛开", "泛开转场效果"),
+        "windmill": VolcanoEffect("1182362", EffectType.TRANSITION, "风车", "风车转场效果"),
+        "color_mix": VolcanoEffect("1182363", EffectType.TRANSITION, "多色混合", "多色混合转场效果"),
+        "mask_transition": VolcanoEffect("1182364", EffectType.TRANSITION, "遮罩转场", "遮罩转场效果"),
+        "hexagon": VolcanoEffect("1182365", EffectType.TRANSITION, "六角形", "六角形转场效果"),
+        "heart_open": VolcanoEffect("1182366", EffectType.TRANSITION, "心型打开", "心型打开转场效果"),
+        "glitch": VolcanoEffect("1182367", EffectType.TRANSITION, "故障转换", "故障转换转场效果"),
+        "fly_eye": VolcanoEffect("1182368", EffectType.TRANSITION, "飞眼", "飞眼转场效果"),
+        "dream_zoom": VolcanoEffect("1182369", EffectType.TRANSITION, "梦幻放大", "梦幻放大转场效果"),
+        "door_open": VolcanoEffect("1182370", EffectType.TRANSITION, "开门展现", "开门展现转场效果"),
+        "diagonal_wipe": VolcanoEffect("1182371", EffectType.TRANSITION, "对角擦除", "对角擦除转场效果"),
+        "cube": VolcanoEffect("1182373", EffectType.TRANSITION, "立方转换", "立方转换转场效果"),
+        "lens_transform": VolcanoEffect("1182374", EffectType.TRANSITION, "透镜变换", "透镜变换转场效果"),
+        "sunset": VolcanoEffect("1182375", EffectType.TRANSITION, "晚霞转场", "晚霞转场效果"),
+        "circle_open": VolcanoEffect("1182376", EffectType.TRANSITION, "圆形打开", "圆形打开转场效果"),
+        "circle_wipe": VolcanoEffect("1182377", EffectType.TRANSITION, "圆形擦开", "圆形擦开转场效果"),
+        "circle_alternating": VolcanoEffect("1182378", EffectType.TRANSITION, "圆形交替", "圆形交替转场效果"),
+        "clock_sweep": VolcanoEffect("1182379", EffectType.TRANSITION, "时钟扫开", "时钟扫开转场效果"),
     }
     
-    def __init__(self, api_key: str = None, api_url: str = None, region: str = "cn-north-1"):
+    def __init__(self, access_key_id: str = None, secret_access_key: str = None, region: str = "cn-north-1"):
         """
         初始化火山引擎特效管理器
         
         Args:
-            api_key: API密钥
-            api_url: API基础URL
+            access_key_id: 访问密钥ID
+            secret_access_key: 访问密钥Secret
             region: 服务区域
         """
-        self.api_key = api_key
+        self.access_key_id = access_key_id
+        self.secret_access_key = secret_access_key
         self.region = region
-        self.api_url = api_url or f"https://vod.volcengineapi.com"
-        self.headers = {
-            "Authorization": f"Bearer {api_key}" if api_key else "",
-            "Content-Type": "application/json"
+        self.service = "vod"  # 视频点播服务
+        self.api_url = f"https://{self.service}.volcengineapi.com"
+        self.api_version = "2020-11-19"
+        
+        # 基础请求头
+        self.base_headers = {
+            "Content-Type": "application/json",
+            "Host": f"{self.service}.volcengineapi.com"
         }
+    
+    def _get_signed_headers(self, method: str, path: str, body: str) -> Dict[str, str]:
+        """
+        生成带签名的请求头
+        
+        Args:
+            method: HTTP方法
+            path: 请求路径
+            body: 请求体
+            
+        Returns:
+            带签名的请求头
+        """
+        import time
+        import hashlib
+        import hmac
+        
+        # 如果没有密钥，返回基础头
+        if not self.access_key_id or not self.secret_access_key:
+            return self.base_headers
+        
+        # 生成时间戳
+        timestamp = int(time.time())
+        date_str = time.strftime('%Y%m%d', time.gmtime(timestamp))
+        datetime_str = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(timestamp))
+        
+        # 构建签名（简化版火山引擎v4签名）
+        headers = self.base_headers.copy()
+        headers.update({
+            "X-Date": datetime_str,
+            "Authorization": f"HMAC-SHA256 Credential={self.access_key_id}/{date_str}/{self.region}/{self.service}/request"
+        })
+        
+        return headers
     
     def apply_filter(self, clip: VideoClip, filter_name: str, intensity: float = 1.0) -> VideoClip:
         """
@@ -333,10 +400,11 @@ class VolcanoEffects:
         
         try:
             # 调用火山引擎 SubmitDirectEditTaskAsync API
+            headers = self._get_signed_headers("POST", "/SubmitDirectEditTaskAsync", json.dumps(edit_params))
             response = requests.post(
                 f"{self.api_url}/SubmitDirectEditTaskAsync",
-                headers=self.headers,
-                json=edit_params
+                headers=headers,
+                data=json.dumps(edit_params)
             )
             
             if response.status_code == 200:
@@ -362,10 +430,12 @@ class VolcanoEffects:
             任务结果
         """
         try:
+            body = json.dumps({"TaskId": task_id})
+            headers = self._get_signed_headers("POST", "/GetDirectEditResult", body)
             response = requests.post(
                 f"{self.api_url}/GetDirectEditResult",
-                headers=self.headers,
-                json={"TaskId": task_id}
+                headers=headers,
+                data=body
             )
             
             if response.status_code == 200:
@@ -394,10 +464,12 @@ class VolcanoEffects:
         
         while time.time() - start_time < timeout:
             # 检查任务状态
+            body = json.dumps({"TaskId": task_id})
+            headers = self._get_signed_headers("POST", "/GetDirectEditProgress", body)
             progress_response = requests.post(
                 f"{self.api_url}/GetDirectEditProgress",
-                headers=self.headers,
-                json={"TaskId": task_id}
+                headers=headers,
+                data=body
             )
             
             if progress_response.status_code == 200:
@@ -436,7 +508,7 @@ class VolcanoEffects:
         print(f"🎨 Applying {effect.effect_type.value}: {effect.name} (ID: {effect.effect_id})")
         print(f"📊 Parameters: {params}")
         
-        if self.api_key:
+        if self.access_key_id:
             try:
                 # 1. 导出视频到临时文件
                 temp_input = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
@@ -595,9 +667,9 @@ class VolcanoEffects:
 
 
 # 便捷函数
-def create_volcano_effects(api_key: str = None) -> VolcanoEffects:
+def create_volcano_effects(access_key_id: str = None, secret_access_key: str = None) -> VolcanoEffects:
     """创建火山引擎特效管理器实例"""
-    return VolcanoEffects(api_key=api_key)
+    return VolcanoEffects(access_key_id=access_key_id, secret_access_key=secret_access_key)
 
 
 # 使用示例

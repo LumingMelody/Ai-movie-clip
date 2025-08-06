@@ -29,7 +29,6 @@ project_root = os.path.abspath(os.path.join(current_dir, '../../..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from core.utils.file_utils import download_file_with_retry
 
 
 class AuraExecutor:
@@ -243,15 +242,44 @@ class AuraExecutor:
             resource_id = layer['resource_id']
             
             if resource_id in resources['videos']:
-                clip = resources['videos'][resource_id].copy()
-                # MoviePy 2.x 使用 with_duration
-                clip = clip.with_duration(duration)
+                original_clip = resources['videos'][resource_id]
+                original_duration = original_clip.duration
+                
+                # 智能处理视频时长
+                if original_duration >= duration:
+                    # 如果原视频够长，随机选择一个片段而不是总是从开头开始
+                    import random
+                    max_start = max(0, original_duration - duration)
+                    start_time = random.uniform(0, max_start) if max_start > 0 else 0
+                    clip = original_clip.subclipped(start_time, start_time + duration)
+                else:
+                    # 如果原视频太短，使用循环播放但限制循环次数
+                    loops_needed = int(duration / original_duration) + 1
+                    if loops_needed > 3:  # 避免过度循环
+                        # 视频太短，放慢播放速度填满时长
+                        speed_factor = original_duration / duration
+                        clip = original_clip.with_effects([lambda c: c.with_fps(c.fps * speed_factor)])
+                        clip = clip.with_duration(duration)
+                    else:
+                        # 适度循环
+                        from moviepy import loop
+                        clip = loop(original_clip, duration=duration)
             else:
                 # 如果视频资源不存在，创建一个占位文本
                 print(f"⚠️ 视频资源不存在: {resource_id}，创建占位内容")
+                # 使用项目根目录的字体文件
+                project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+                font_path = os.path.join(project_root, '微软雅黑.ttf')
+                
+                # 选择最佳可用字体
+                if os.path.exists(font_path):
+                    font_to_use = font_path
+                else:
+                    font_to_use = 'Arial-Unicode-MS'  # macOS 系统中文字体
+                
                 clip = TextClip(
                     text=f"视频片段: {resource_id}",
-                    font='Arial',
+                    font=font_to_use,
                     font_size=40,
                     color='white',
                     text_align='center'
@@ -280,16 +308,30 @@ class AuraExecutor:
                 clip = CompositeVideoClip([bg, clip.with_position('center')])
                 
         elif layer_type == 'text':
-            # 创建文字图层
+            # 创建文字图层 - 使用与 app_0715.py 相同的方式
             content = layer.get('content', '')
             style = layer.get('style', {})
             
+            # 使用项目根目录的字体文件
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+            font_path = os.path.join(project_root, '微软雅黑.ttf')
+            
+            # 字体优先级：项目字体 -> 系统中文字体 -> Arial
+            if os.path.exists(font_path):
+                font_to_use = font_path
+            else:
+                font_to_use = 'Arial-Unicode-MS'  # macOS 系统中文字体
+            
+            # 使用与 app_0715.py 相同的字幕创建方式
             clip = TextClip(
                 text=content,
-                font=style.get('font', 'Arial'),
+                font=font_to_use,
                 font_size=style.get('size', 50),
-                color=style.get('color', 'white'),
-                text_align='center'
+                color=style.get('color', 'Yellow'),  # 使用黄色，与 app_0715.py 一致
+                stroke_color='black',
+                stroke_width=2,
+                size=(1000, None),
+                method='caption'
             ).with_duration(duration)
             
             # 应用动画

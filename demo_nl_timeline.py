@@ -11,7 +11,7 @@ from pathlib import Path
 # 添加项目路径
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from video_cut.natural_language_processor import NaturalLanguageProcessor
+from video_cut.natural_language_processor import VideoTimelineProcessor
 
 
 def print_timeline_summary(timeline: dict):
@@ -52,8 +52,8 @@ def demo1_simple_edit():
     user_input = "我要给这个视频加上转场特效和字幕"
     print(f"\n💬 用户输入: {user_input}")
     
-    processor = NaturalLanguageProcessor()
-    timeline = processor.process_natural_language(user_input)
+    processor = VideoTimelineProcessor()
+    timeline = processor.generate_timeline_from_text(user_input)
     
     print_timeline_summary(timeline)
     
@@ -85,8 +85,8 @@ def demo2_detailed_edit():
     
     print(f"\n💬 用户输入: {user_input}")
     
-    processor = NaturalLanguageProcessor()
-    timeline = processor.process_natural_language(user_input)
+    processor = VideoTimelineProcessor()
+    timeline = processor.generate_timeline_from_text(user_input)
     
     print_timeline_summary(timeline)
     
@@ -127,8 +127,8 @@ def demo3_educational_video():
     
     print(f"\n💬 用户输入: {user_input}")
     
-    processor = NaturalLanguageProcessor()
-    timeline = processor.process_natural_language(user_input)
+    processor = VideoTimelineProcessor()
+    timeline = processor.generate_timeline_from_text(user_input)
     
     print_timeline_summary(timeline)
     
@@ -157,8 +157,8 @@ def demo4_social_media():
     
     print(f"\n💬 用户输入: {user_input}")
     
-    processor = NaturalLanguageProcessor()
-    timeline = processor.process_natural_language(user_input)
+    processor = VideoTimelineProcessor()
+    timeline = processor.generate_timeline_from_text(user_input)
     
     print_timeline_summary(timeline)
     
@@ -195,8 +195,8 @@ def demo5_complex_effects():
     
     print(f"\n💬 用户输入: {user_input}")
     
-    processor = NaturalLanguageProcessor()
-    timeline = processor.process_natural_language(user_input)
+    processor = VideoTimelineProcessor()
+    timeline = processor.generate_timeline_from_text(user_input)
     
     print_timeline_summary(timeline)
     
@@ -229,7 +229,7 @@ def interactive_mode():
     print("提示：可以描述视频类型、时长、特效、字幕等需求。")
     print("输入 'quit' 或 '退出' 结束程序。\n")
     
-    processor = NaturalLanguageProcessor()
+    processor = VideoTimelineProcessor()
     output_dir = Path("output/demos/interactive")
     output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -248,7 +248,7 @@ def interactive_mode():
             
             # 处理输入
             print("\n⏳ 正在处理...")
-            timeline = processor.process_natural_language(user_input)
+            timeline = processor.generate_timeline_from_text(user_input)
             
             # 显示结果
             print_timeline_summary(timeline)
