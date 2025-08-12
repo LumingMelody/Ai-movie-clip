@@ -3805,10 +3805,35 @@ class TagVideoRequest(BaseModel):
     dynamic_tags: Optional[List[str]] = Field(None, description="动态标签列表")
     duration_per_tag: Union[float, Dict[str, float]] = Field(5.0, description="每个标签的时长（秒），可以是统一时长或每个标签单独设置")
     output_format: Optional[Dict[str, Any]] = Field(None, description="输出格式配置")
-    mode: str = Field("sync", description="处理模式: sync/async")
+    mode: str = Field("async", description="处理模式: sync/async")
+    tenant_id: Optional[str] = Field(None, description="租户ID，提供则会更新任务状态")
+    id: Optional[str] = Field(None, description="业务ID，提供则会更新任务状态")
 
 # 初始化标签视频处理器
 tag_video_handler = TagVideoAPIHandler()
+
+def process_tag_video_generation(args):
+    """
+    异步任务：标签视频生成处理函数
+    """
+    print(f"🎬 [ASYNC] 开始异步处理标签视频生成")
+    print(f"   参数: {args.keys()}")
+    
+    try:
+        # 使用已有的处理器处理请求
+        result = tag_video_handler.handle_request(args)
+        
+        if result and result.get('success'):
+            print(f"✅ [ASYNC] 异步处理成功")
+            return result.get('video_path', '')
+        else:
+            error_msg = result.get('error', '未知错误') if result else '处理器返回空结果'
+            print(f"❌ [ASYNC] 异步处理失败: {error_msg}")
+            raise Exception(error_msg)
+            
+    except Exception as e:
+        print(f"❌ [ASYNC] 异步处理异常: {e}")
+        raise e
 
 @app.post("/video/generate-from-tags")
 async def generate_video_from_tags(request: TagVideoRequest):
@@ -3858,6 +3883,21 @@ async def generate_video_from_tags(request: TagVideoRequest):
     async def process():
         try:
             print(f"[DEBUG] 收到标签视频生成请求: tags={request.tags}")
+            print(f"[DEBUG] 租户ID: {request.tenant_id}, 业务ID: {request.id}")
+            
+            # 🔥 如果有tenant_id，立即更新开始状态
+            if request.tenant_id:
+                try:
+                    print(f"🔄 [STATUS] 更新开始状态: tenant_id={request.tenant_id}, id={request.id}")
+                    api_service.update_task_status(
+                        task_id=str(request.id or 'unknown'),
+                        status="0",  # 开始状态
+                        tenant_id=request.tenant_id,
+                        business_id=request.id
+                    )
+                    print(f"✅ [STATUS] 开始状态更新成功")
+                except Exception as e:
+                    print(f"❌ [STATUS] 开始状态更新失败: {e}")
             
             # 处理请求
             result = tag_video_handler.handle_request(request.dict())
@@ -3903,6 +3943,7 @@ async def generate_video_from_tags(request: TagVideoRequest):
                                 'message': '视频生成成功'
                             }
                             
+                            print(f"🔄 [STATUS] 调用enhance_endpoint_result进行状态更新")
                             return enhance_endpoint_result(
                                 enhanced_result, 
                                 "generate_from_tags", 
@@ -3924,6 +3965,7 @@ async def generate_video_from_tags(request: TagVideoRequest):
                                 'total_duration': total_duration,
                                 'message': '视频生成成功（OSS上传失败）'
                             }
+                            print(f"🔄 [STATUS] 调用enhance_endpoint_result进行状态更新（OSS上传失败）")
                             return enhance_endpoint_result(
                                 enhanced_result,
                                 "generate_from_tags",
@@ -3947,6 +3989,7 @@ async def generate_video_from_tags(request: TagVideoRequest):
                             'total_duration': total_duration,
                             'message': '视频生成成功（OSS上传失败）'
                         }
+                        print(f"🔄 [STATUS] 调用enhance_endpoint_result进行状态更新（异常处理）")
                         return enhance_endpoint_result(
                             enhanced_result,
                             "generate_from_tags",
@@ -3959,10 +4002,35 @@ async def generate_video_from_tags(request: TagVideoRequest):
                     return format_response(error_res, mode="sync", error_type="general_exception")
             else:
                 # 处理失败
+                if request.tenant_id:
+                    try:
+                        print(f"❌ [STATUS] 更新失败状态: 生成失败")
+                        api_service.update_task_status(
+                            task_id=str(request.id or 'unknown'),
+                            status="2",  # 失败状态
+                            tenant_id=request.tenant_id,
+                            business_id=request.id
+                        )
+                    except Exception as e:
+                        print(f"❌ [STATUS] 失败状态更新失败: {e}")
+                
                 error_res = {"error": result.get('error', '生成失败'), "function_name": "generate_from_tags"}
                 return format_response(error_res, mode="sync", error_type="general_exception")
                 
         except Exception as e:
+            # 异常情况下也更新失败状态
+            if request.tenant_id:
+                try:
+                    print(f"❌ [STATUS] 更新失败状态: 异常 - {str(e)}")
+                    api_service.update_task_status(
+                        task_id=str(request.id or 'unknown'),
+                        status="2",  # 失败状态
+                        tenant_id=request.tenant_id,
+                        business_id=request.id
+                    )
+                except Exception as status_e:
+                    print(f"❌ [STATUS] 失败状态更新失败: {status_e}")
+            
             error_res = {"error": str(e), "function_name": "generate_from_tags"}
             return format_response(error_res, mode="sync", error_type="general_exception")
     
