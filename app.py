@@ -3825,7 +3825,12 @@ def process_tag_video_generation(args):
         
         if result and result.get('success'):
             print(f"✅ [ASYNC] 异步处理成功")
-            return result.get('video_path', '')
+            video_path = result.get('video_path', '')
+            
+            # 🔥 异步模式下，也需要调用create_resource
+            # 这部分逻辑会在AsyncTaskManager的_execute_task_with_oss_upload中处理
+            # 这里只需要返回视频路径
+            return video_path
         else:
             error_msg = result.get('error', '未知错误') if result else '处理器返回空结果'
             print(f"❌ [ASYNC] 异步处理失败: {error_msg}")
@@ -3923,6 +3928,37 @@ async def generate_video_from_tags(request: TagVideoRequest):
                             video_url = f"https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/{oss_filename}"
                             print(f"✅ [TAG-VIDEO] OSS上传成功，访问链接: {video_url}")
                             
+                            # 🔥 调用create_resource保存资源到素材库
+                            resource_id = None
+                            if request.tenant_id:
+                                try:
+                                    from core.clipgenerate.interface_function import get_file_info
+                                    file_info = get_file_info(local_path)
+                                    if file_info:
+                                        resource_result = api_service.create_resource(
+                                            resource_type=file_info['resource_type'],
+                                            name=file_info['name'],
+                                            path=oss_filename,
+                                            local_full_path=local_path,
+                                            file_type=file_info['file_type'],
+                                            size=file_info['size'],
+                                            tenant_id=request.tenant_id
+                                        )
+                                        print(f"✅ [TAG-VIDEO] 资源保存到素材库成功")
+                                        
+                                        # 尝试从响应中获取resource_id
+                                        if resource_result and isinstance(resource_result, dict):
+                                            resource_id = resource_result.get('resourceId') or resource_result.get('id')
+                                        resource_id = resource_id or 95  # 默认resource_id
+                                    else:
+                                        print(f"⚠️ [TAG-VIDEO] 无法获取文件信息: {local_path}")
+                                        resource_id = 95
+                                except Exception as e:
+                                    print(f"❌ [TAG-VIDEO] 资源创建失败: {e}")
+                                    resource_id = 95
+                            else:
+                                resource_id = 95
+                            
                             # 计算总时长
                             if isinstance(request.duration_per_tag, dict):
                                 # 如果是字典，计算所有标签时长的和
@@ -3931,7 +3967,23 @@ async def generate_video_from_tags(request: TagVideoRequest):
                                 # 如果是数字，乘以标签数量
                                 total_duration = request.duration_per_tag * len(request.tags)
                             
-                            # 使用enhance_endpoint_result格式化响应
+                            # 🔥 如果有tenant_id，更新完成状态
+                            if request.tenant_id:
+                                try:
+                                    print(f"🔄 [STATUS] 更新完成状态: tenant_id={request.tenant_id}, resource_id={resource_id}")
+                                    api_service.update_task_status(
+                                        task_id=str(request.id or 'unknown'),
+                                        status="1",  # 完成状态
+                                        tenant_id=request.tenant_id,
+                                        business_id=request.id,
+                                        path=oss_filename,
+                                        resource_id=resource_id
+                                    )
+                                    print(f"✅ [STATUS] 完成状态更新成功")
+                                except Exception as e:
+                                    print(f"❌ [STATUS] 完成状态更新失败: {e}")
+                            
+                            # 返回成功响应
                             enhanced_result = {
                                 'video_url': video_url,
                                 'video_path': local_path,
@@ -3940,22 +3992,30 @@ async def generate_video_from_tags(request: TagVideoRequest):
                                 'duration_per_tag': request.duration_per_tag,
                                 'total_duration': total_duration,
                                 'text_content': result.get('text_content', request.text_content),
-                                'message': '视频生成成功'
+                                'message': '视频生成成功',
+                                'resource_id': resource_id
                             }
                             
-                            print(f"🔄 [STATUS] 调用enhance_endpoint_result进行状态更新")
-                            return enhance_endpoint_result(
-                                enhanced_result, 
-                                "generate_from_tags", 
-                                request,
-                                is_digital_human=False
-                            )
+                            return format_response(enhanced_result, mode="sync")
                         else:
                             # 计算总时长
                             if isinstance(request.duration_per_tag, dict):
                                 total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
                             else:
                                 total_duration = request.duration_per_tag * len(request.tags)
+                            
+                            # 🔥 OSS上传失败，更新失败状态
+                            if request.tenant_id:
+                                try:
+                                    print(f"❌ [STATUS] 更新失败状态: OSS上传失败")
+                                    api_service.update_task_status(
+                                        task_id=str(request.id or 'unknown'),
+                                        status="2",  # 失败状态
+                                        tenant_id=request.tenant_id,
+                                        business_id=request.id
+                                    )
+                                except Exception as e:
+                                    print(f"❌ [STATUS] 失败状态更新失败: {e}")
                             
                             # 上传失败但本地生成成功
                             enhanced_result = {
@@ -3965,13 +4025,7 @@ async def generate_video_from_tags(request: TagVideoRequest):
                                 'total_duration': total_duration,
                                 'message': '视频生成成功（OSS上传失败）'
                             }
-                            print(f"🔄 [STATUS] 调用enhance_endpoint_result进行状态更新（OSS上传失败）")
-                            return enhance_endpoint_result(
-                                enhanced_result,
-                                "generate_from_tags",
-                                request,
-                                is_digital_human=False
-                            )
+                            return format_response(enhanced_result, mode="sync")
                     except Exception as e:
                         print(f"上传OSS失败: {e}")
                         
@@ -3981,6 +4035,19 @@ async def generate_video_from_tags(request: TagVideoRequest):
                         else:
                             total_duration = request.duration_per_tag * len(request.tags)
                         
+                        # 🔥 异常情况，更新失败状态
+                        if request.tenant_id:
+                            try:
+                                print(f"❌ [STATUS] 更新失败状态: 上传异常 - {str(e)}")
+                                api_service.update_task_status(
+                                    task_id=str(request.id or 'unknown'),
+                                    status="2",  # 失败状态
+                                    tenant_id=request.tenant_id,
+                                    business_id=request.id
+                                )
+                            except Exception as status_e:
+                                print(f"❌ [STATUS] 失败状态更新失败: {status_e}")
+                        
                         # 返回本地路径
                         enhanced_result = {
                             'video_path': result['video_path'],
@@ -3989,13 +4056,7 @@ async def generate_video_from_tags(request: TagVideoRequest):
                             'total_duration': total_duration,
                             'message': '视频生成成功（OSS上传失败）'
                         }
-                        print(f"🔄 [STATUS] 调用enhance_endpoint_result进行状态更新（异常处理）")
-                        return enhance_endpoint_result(
-                            enhanced_result,
-                            "generate_from_tags",
-                            request,
-                            is_digital_human=False
-                        )
+                        return format_response(enhanced_result, mode="sync")
                 else:
                     # 没有video_path，返回错误
                     error_res = {"error": "生成的结果中没有视频路径", "function_name": "generate_from_tags"}
