@@ -433,7 +433,7 @@ class TagVideoGenerator:
             'color': 'white',
             'stroke_color': 'black',
             'stroke_width': 2,
-            'position': ('center', 'bottom'),
+            'grid_position': 8,  # 默认位置：底部中间（九宫格第8格）
             'margin': 50
         }
     
@@ -461,7 +461,7 @@ class TagVideoGenerator:
         project_root = Path(__file__).parent.parent.parent
         font_path = project_root / "江西拙楷2.0.ttf"
         
-        # 创建字幕剪辑
+        # 创建字幕剪辑（支持九宫格位置）
         subtitle_clips = create_subtitle_clips(
             segments=segments,
             timings=timings,
@@ -469,7 +469,8 @@ class TagVideoGenerator:
             font_size=config.get('font_size', 48),
             color=config.get('color', 'white'),
             stroke_color=config.get('stroke_color', 'black'),
-            stroke_width=config.get('stroke_width', 2)
+            stroke_width=config.get('stroke_width', 2),
+            grid_position=config.get('grid_position', 8)  # 添加九宫格位置参数
         )
         
         # 合成视频和字幕

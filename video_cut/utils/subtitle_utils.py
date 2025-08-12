@@ -126,12 +126,45 @@ def calculate_progressive_subtitle_timings(video_duration: float, segments: List
     return timings
 
 
+def get_position_from_grid(grid_position: int) -> Tuple[str, float]:
+    """
+    将九宫格位置转换为moviepy的位置参数
+    
+    九宫格布局:
+    1 | 2 | 3
+    ---------
+    4 | 5 | 6
+    ---------
+    7 | 8 | 9
+    
+    Args:
+        grid_position: 1-9的数字，表示九宫格位置
+    
+    Returns:
+        (horizontal, vertical) 位置元组
+    """
+    position_map = {
+        1: ("left", 0.1),    # 左上
+        2: ("center", 0.1),  # 中上
+        3: ("right", 0.1),   # 右上
+        4: ("left", 0.5),    # 左中
+        5: ("center", 0.5),  # 中心
+        6: ("right", 0.5),   # 右中
+        7: ("left", 0.9),    # 左下
+        8: ("center", 0.9),  # 中下
+        9: ("right", 0.9),   # 右下
+    }
+    
+    # 默认位置：底部中间
+    return position_map.get(grid_position, ("center", 0.9))
+
+
 def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]], 
                          font: str = "Arial", font_size: int = 36, 
                          color: str = "white", stroke_color: str = "black",
-                         stroke_width: int = 2) -> List[TextClip]:
+                         stroke_width: int = 2, grid_position: int = 8) -> List[TextClip]:
     """
-    创建字幕剪辑列表 - 使用coze系统的实现方式
+    创建字幕剪辑列表 - 支持九宫格位置
     
     Args:
         segments: 字幕文本片段
@@ -141,6 +174,7 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
         color: 字体颜色
         stroke_color: 描边颜色
         stroke_width: 描边宽度
+        grid_position: 九宫格位置 (1-9)
     
     Returns:
         字幕剪辑列表
@@ -204,9 +238,10 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
                 method='caption'
             )
             
-            # 🔥 使用coze系统的时间和位置设置
+            # 🔥 使用九宫格位置设置
+            position = get_position_from_grid(grid_position)
             txt_clip = txt_clip.with_start(start_time).with_end(end_time)
-            txt_clip = txt_clip.with_position(("center", 0.7), relative=True)  # 🔥 使用相对位置
+            txt_clip = txt_clip.with_position(position, relative=True)  # 🔥 使用九宫格位置
             
             subtitle_clips.append(txt_clip)
             print(f"✅ 创建字幕片段{i+1}: '{segment[:20]}...' ({start_time:.1f}s-{end_time:.1f}s)")
@@ -226,7 +261,7 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
                     stroke_width=1,
                     size=(1000, None),
                     method='caption'
-                ).with_start(start_time).with_end(end_time).with_position(("center", 0.7), relative=True)
+                ).with_start(start_time).with_end(end_time).with_position(get_position_from_grid(grid_position), relative=True)
                 subtitle_clips.append(txt_clip)
                 print(f"✅ 创建备用字幕片段{i+1}")
             except Exception as e2:
@@ -239,7 +274,7 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
                         text=segment,
                         font_size=font_size,
                         color=color
-                    ).with_start(start_time).with_end(end_time).with_position(("center", 0.8), relative=True)
+                    ).with_start(start_time).with_end(end_time).with_position(get_position_from_grid(grid_position), relative=True)
                     subtitle_clips.append(txt_clip)
                     print(f"✅ 创建最简字幕片段{i+1}")
                 except Exception as e3:

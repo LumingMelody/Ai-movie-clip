@@ -3801,7 +3801,7 @@ class TagVideoRequest(BaseModel):
     tags: List[str] = Field(..., description="标签列表，按顺序处理")
     tag_videos: Dict[str, Dict[str, List[str]]] = Field(..., description="标签到视频列表的映射")
     text_content: Optional[str] = Field(None, description="文案内容，不提供则AI生成")
-    subtitle_config: Optional[Dict[str, Any]] = Field(None, description="字幕配置")
+    subtitle_config: Optional[Dict[str, Any]] = Field(None, description="字幕配置，支持grid_position(1-9)设置九宫格位置")
     dynamic_tags: Optional[List[str]] = Field(None, description="动态标签列表")
     duration_per_tag: Union[float, Dict[str, float]] = Field(5.0, description="每个标签的时长（秒），可以是统一时长或每个标签单独设置")
     output_format: Optional[Dict[str, Any]] = Field(None, description="输出格式配置")
@@ -3992,7 +3992,7 @@ async def generate_video_from_tags(request: TagVideoRequest):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app_0715:app",  # 指向当前文件的应用实例
+        "app:app",  # 指向当前文件的应用实例
         host="0.0.0.0",
         port=8100,
         # reload=True,  # 启用热重载
