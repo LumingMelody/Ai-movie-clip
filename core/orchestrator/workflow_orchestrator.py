@@ -14,6 +14,7 @@ from moviepy import VideoFileClip, concatenate_videoclips
 
 from core.ai.ai_model_caller import AIModelCaller
 from core.utils.config_manager import config, ErrorHandler, PathHelper
+from core.utils.video_utils import video_processor
 
 # 设置Python路径
 config.setup_python_path()
@@ -310,7 +311,7 @@ class VideoEditingOrchestrator:
             
             # 根据策略类型处理
             if strategy_type == 'multi_segment':
-                return self._execute_multi_segment_strategy(clip, actions, has_audio)
+                return self._execute_multi_segment_strategy_safe(clip, actions, has_audio)
             else:
                 return self._execute_single_segment_strategy(clip, actions, has_audio)
         
