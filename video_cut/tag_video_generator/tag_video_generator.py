@@ -651,7 +651,7 @@ class TagVideoGenerator:
     def process_request(
         self,
         request_data: Dict[str, Any],
-        output_dir: str = "output/tag_videos"
+        output_dir: str = "ikun/output/tag_videos"
     ) -> Dict[str, Any]:
         """
         处理前端请求

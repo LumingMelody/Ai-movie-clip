@@ -199,18 +199,8 @@ def get_full_file_path(warehouse_path):
     if not warehouse_path:
         return None
 
-    # 🔥 修复：对于 tag_videos，使用项目根目录
-    if 'output/tag_videos' in warehouse_path or warehouse_path.startswith('output'):
-        user_data_dir = config.get_user_data_dir()  # /project_root/ikun
-        project_root = os.path.dirname(user_data_dir)  # /project_root
-        full_path = os.path.join(project_root, warehouse_path.replace('/', os.path.sep))
-        print(f"🔧 tag_videos路径修复: {warehouse_path} -> {full_path}")
-    else:
-        # 其他情况使用原逻辑
-        user_data_dir = config.get_user_data_dir()
-        full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
-        print(f"🔧 常规路径处理: {warehouse_path} -> {full_path}")
-    
+    user_data_dir = config.get_user_data_dir()
+    full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
     return os.path.normpath(full_path)
 
 
@@ -278,22 +268,15 @@ def extract_warehouse_path(result):
         return None
 
     # 🔥 关键处理：转换为相对于warehouse的路径
-    user_data_dir = config.get_user_data_dir()  # 返回 /project_root/ikun
-    project_root = os.path.dirname(user_data_dir)  # 获取项目根目录 /project_root
+    user_data_dir = config.get_user_data_dir()
 
     # 如果是绝对路径，转换为相对路径
     if os.path.isabs(video_path):
         try:
-            # 🔥 对于 tag_videos，相对于项目根目录计算路径
-            if 'output/tag_videos' in video_path or 'tag_videos' in video_path:
-                relative_path = os.path.relpath(video_path, project_root)
-                print(f"🔄 tag_videos路径: 相对于项目根目录 {relative_path}")
-            else:
-                # 其他情况，相对于用户数据目录计算
-                relative_path = os.path.relpath(video_path, user_data_dir)
-                print(f"🔄 常规路径: 相对于用户数据目录 {relative_path}")
-            
+            # 获取相对于用户数据目录的路径
+            relative_path = os.path.relpath(video_path, user_data_dir)
             video_path = relative_path
+            print(f"🔄 转换绝对路径为相对路径: {relative_path}")
         except ValueError:
             print(f"⚠️ 无法转换路径: {video_path}")
             return None
