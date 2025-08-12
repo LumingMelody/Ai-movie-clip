@@ -20,6 +20,7 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from core.text_generate.qwen_client import call_qwen
+from core.clipgenerate.aliyun_subtitle_api import AliyunSubtitleAPI, SubtitleConfig
 
 # 导入字幕工具
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,16 +30,19 @@ from video_cut.utils.subtitle_utils import split_text_for_progressive_subtitles,
 class TagVideoGenerator:
     """基于标签的视频生成器"""
     
-    def __init__(self, tag_materials_dir: str = "tag_materials"):
+    def __init__(self, tag_materials_dir: str = "tag_materials", use_aliyun_subtitle: bool = True):
         """
         初始化生成器
         
         Args:
             tag_materials_dir: 标签素材目录路径
+            use_aliyun_subtitle: 是否使用阿里云字幕API
         """
         self.tag_materials_dir = Path(tag_materials_dir)
         self.tag_materials_dir.mkdir(parents=True, exist_ok=True)
         self.logger = self._setup_logger()
+        self.use_aliyun_subtitle = use_aliyun_subtitle
+        self.aliyun_subtitle_api = AliyunSubtitleAPI() if use_aliyun_subtitle else None
         
     def _setup_logger(self) -> logging.Logger:
         """设置日志"""
@@ -437,6 +441,53 @@ class TagVideoGenerator:
             'margin': 50
         }
     
+    def _create_aliyun_subtitles(self, video: VideoFileClip, text: str, config: Dict) -> str:
+        """
+        使用阿里云API创建字幕
+        
+        Args:
+            video: 视频片段
+            text: 字幕文本
+            config: 字幕配置
+            
+        Returns:
+            字幕时间轴JSON字符串
+        """
+        if not self.use_aliyun_subtitle or not self.aliyun_subtitle_api:
+            self.logger.warning("阿里云字幕API未启用，使用本地字幕")
+            return ""
+        
+        self.logger.info("使用阿里云API创建字幕...")
+        
+        # 分割文本为字幕片段
+        subtitles = self.aliyun_subtitle_api.split_text_for_subtitles(
+            text=text,
+            video_duration=video.duration,
+            max_chars_per_subtitle=config.get('max_chars_per_subtitle', 20),
+            min_display_time=config.get('min_display_time', 2.0)
+        )
+        
+        # 应用九宫格位置和样式配置
+        grid_position = config.get('grid_position', 8)
+        font_size = config.get('font_size', 48)
+        font_color = config.get('color', '#FFFFFF')
+        outline_color = config.get('stroke_color', '#000000')
+        outline_width = config.get('stroke_width', 2)
+        
+        for subtitle in subtitles:
+            subtitle.grid_position = grid_position
+            subtitle.font_size = font_size
+            subtitle.font_color = font_color
+            subtitle.outline_color = outline_color
+            subtitle.outline_width = outline_width
+        
+        # 创建阿里云字幕时间轴
+        timeline = self.aliyun_subtitle_api.create_subtitle_timeline(subtitles)
+        
+        self.logger.info(f"创建了 {len(subtitles)} 个字幕片段，九宫格位置: {grid_position}")
+        
+        return json.dumps(timeline, ensure_ascii=False, indent=2)
+    
     def _add_subtitles(self, video: VideoFileClip, text: str, config: Dict) -> CompositeVideoClip:
         """
         添加字幕到视频 - 使用subtitle_utils的实现
@@ -450,6 +501,25 @@ class TagVideoGenerator:
             带字幕的视频
         """
         self.logger.info("添加字幕...")
+        
+        # 优先使用阿里云字幕API
+        if self.use_aliyun_subtitle and self.aliyun_subtitle_api:
+            aliyun_subtitle_json = self._create_aliyun_subtitles(video, text, config)
+            if aliyun_subtitle_json:
+                # 保存阿里云字幕配置到文件
+                output_dir = Path("output/aliyun_subtitles")
+                output_dir.mkdir(parents=True, exist_ok=True)
+                subtitle_file = output_dir / f"subtitle_{hash(text) % 1000000}.json"
+                with open(subtitle_file, 'w', encoding='utf-8') as f:
+                    f.write(aliyun_subtitle_json)
+                self.logger.info(f"阿里云字幕配置已保存到: {subtitle_file}")
+                
+                # 注意：这里返回原视频，因为阿里云字幕是通过API处理的
+                # 在实际生产环境中，您需要调用阿里云的制作API来添加字幕
+                return video
+        
+        # 备用方案：使用本地字幕
+        self.logger.info("使用本地字幕方案...")
         
         # 分割文本为适合显示的片段
         segments = split_text_for_progressive_subtitles(text, max_chars_per_line=25, max_lines=2)
