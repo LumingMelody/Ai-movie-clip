@@ -194,9 +194,11 @@ class TagVideoGenerator:
         self.logger.info(f"基础视频拼接完成，总时长: {base_video.duration}秒")
         
         # 3. 生成或使用文案
-        if text_content is None:
+        if not text_content or text_content.strip() == "":
             text_content = self._generate_text_content(list(tag_config.keys()))
             self.logger.info(f"AI生成文案: {text_content[:100]}...")
+        else:
+            self.logger.info(f"使用提供的文案: {text_content[:100]}...")
         
         # 4. 添加字幕
         if subtitle_config is None:
