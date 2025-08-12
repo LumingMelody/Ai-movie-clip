@@ -3812,16 +3812,16 @@ class TagVideoRequest(BaseModel):
 # 初始化标签视频处理器
 tag_video_handler = TagVideoAPIHandler()
 
-def process_tag_video_generation(args):
+def process_tag_video_generation(**kwargs):
     """
     异步任务：标签视频生成处理函数
     """
     print(f"🎬 [ASYNC] 开始异步处理标签视频生成")
-    print(f"   参数: {args.keys()}")
+    print(f"   参数: {kwargs.keys()}")
     
     try:
         # 使用已有的处理器处理请求
-        result = tag_video_handler.handle_request(args)
+        result = tag_video_handler.handle_request(kwargs)
         
         if result and result.get('success'):
             print(f"✅ [ASYNC] 异步处理成功")
