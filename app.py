@@ -3808,7 +3808,7 @@ class TagVideoRequest(BaseModel):
     """标签视频生成请求模型"""
     tags: List[str] = Field(..., description="标签列表，按顺序处理")
     tag_videos: Dict[str, Dict[str, List[str]]] = Field(..., description="标签到视频列表的映射")
-    text_content: Optional[str] = Field(None, description="文案内容，不提供则AI生成")
+    text_content: Optional[Union[str, Dict[str, str]]] = Field(None, description="文案内容，支持字符串或字典格式，不提供则AI生成")
     subtitle_config: Optional[Dict[str, Any]] = Field(None, description="字幕配置，支持grid_position(1-9)设置九宫格位置")
     dynamic_tags: Optional[List[str]] = Field(None, description="动态标签列表")
     duration_per_tag: Union[float, Dict[str, float]] = Field(5.0, description="每个标签的时长（秒），可以是统一时长或每个标签单独设置")

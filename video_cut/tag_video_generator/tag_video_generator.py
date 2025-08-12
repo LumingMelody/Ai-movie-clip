@@ -156,7 +156,7 @@ class TagVideoGenerator:
         output_path: str,
         duration_per_tag: Union[float, Dict[str, float]] = 5.0,
         clip_duration_range: tuple = (3.0, 8.0),
-        text_content: Optional[str] = None,
+        text_content: Optional[Union[str, Dict[str, str]]] = None,
         subtitle_config: Optional[Dict] = None,
         dynamic_tags: Optional[List[str]] = None,
         fps: int = 30,
@@ -166,13 +166,16 @@ class TagVideoGenerator:
         根据标签配置生成视频
         
         Args:
-            tag_config: 标签配置，格式如 {"黄山风景": {"video": ["path1.mp4", "path2.mp4"]}}
+            tag_config: 标签配置，格式如 {"黄山风景": {"video": ["path1.mp4", "path2.mp4"], "text_content": "文案1"}}
             output_path: 输出视频路径
             duration_per_tag: 每个标签的目标时长（秒）
                 - float: 所有标签使用相同时长
                 - Dict[str, float]: 每个标签单独设置时长，如 {"黄山风景": 5.0, "徽州特色餐": 10.0}
             clip_duration_range: 随机片段时长范围 (min, max)
-            text_content: 文案内容，如果为None则使用AI生成
+            text_content: 文案内容，支持三种格式：
+                - str: 统一文案应用到整个视频
+                - Dict[str, str]: 每个标签单独文案，如 {"黄山风景": "文案1", "徽州特色餐": "文案2"}
+                - None: 使用AI生成，或使用tag_config中embedded的text_content
             subtitle_config: 字幕配置
             dynamic_tags: 动态标签列表
             fps: 输出视频帧率
@@ -193,18 +196,15 @@ class TagVideoGenerator:
         base_video = concatenate_videoclips(video_clips, method="compose")
         self.logger.info(f"基础视频拼接完成，总时长: {base_video.duration}秒")
         
-        # 3. 生成或使用文案
-        if not text_content or text_content.strip() == "":
-            text_content = self._generate_text_content(list(tag_config.keys()))
-            self.logger.info(f"AI生成文案: {text_content[:100]}...")
-        else:
-            self.logger.info(f"使用提供的文案: {text_content[:100]}...")
+        # 3. 处理文案内容
+        tag_text_map = self._process_text_content(text_content, tag_config)
+        self.logger.info(f"处理文案完成，标签数量: {len(tag_text_map)}")
         
         # 4. 添加字幕
         if subtitle_config is None:
             subtitle_config = self._get_default_subtitle_config()
         
-        video_with_subtitles = self._add_subtitles(base_video, text_content, subtitle_config)
+        video_with_subtitles = self._add_subtitles(base_video, tag_text_map, tag_config, duration_per_tag, subtitle_config)
         
         # 5. 添加动态标签（可选，通过subtitle_config控制）
         show_dynamic_tags = subtitle_config.get('show_dynamic_tags', False)  # 默认不显示
@@ -435,6 +435,54 @@ class TagVideoGenerator:
             default_text = f"探索{tags[0]}的魅力，体验{tags[-1]}的精彩，这里有最美的风景和难忘的回忆等着你。"
             return default_text
     
+    def _process_text_content(
+        self, 
+        text_content: Optional[Union[str, Dict[str, str]]], 
+        tag_config: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, str]:
+        """
+        处理文案内容，支持多种格式
+        
+        Args:
+            text_content: 文案内容（字符串、字典或None）
+            tag_config: 标签配置
+            
+        Returns:
+            每个标签的文案映射 {tag_name: text_content}
+        """
+        tags = list(tag_config.keys())
+        tag_text_map = {}
+        
+        if isinstance(text_content, dict):
+            # 格式1：顶层字典格式 {"tag1": "text1", "tag2": "text2"}
+            self.logger.info("使用顶层字典格式的文案")
+            for tag in tags:
+                if tag in text_content and text_content[tag].strip():
+                    tag_text_map[tag] = text_content[tag]
+                else:
+                    # 如果没有指定文案，使用AI生成
+                    tag_text_map[tag] = self._generate_text_content([tag])
+        elif isinstance(text_content, str) and text_content.strip():
+            # 格式2：统一字符串，分配给所有标签
+            self.logger.info("使用统一文案")
+            for tag in tags:
+                tag_text_map[tag] = text_content
+        else:
+            # 格式3：检查tag_config中的embedded text_content，或使用AI生成
+            self.logger.info("处理embedded或AI生成文案")
+            for tag in tags:
+                tag_data = tag_config[tag]
+                embedded_text = tag_data.get('text_content', '').strip() if isinstance(tag_data, dict) else ''
+                
+                if embedded_text:
+                    tag_text_map[tag] = embedded_text
+                    self.logger.info(f"使用标签 {tag} 的embedded文案: {embedded_text[:50]}...")
+                else:
+                    # 使用AI生成单个标签的文案
+                    tag_text_map[tag] = self._generate_text_content([tag])
+        
+        return tag_text_map
+    
     def _get_default_subtitle_config(self) -> Dict:
         """获取默认字幕配置"""
         return {
@@ -494,61 +542,97 @@ class TagVideoGenerator:
         
         return json.dumps(timeline, ensure_ascii=False, indent=2)
     
-    def _add_subtitles(self, video: VideoFileClip, text: str, config: Dict) -> CompositeVideoClip:
+    def _add_subtitles(
+        self, 
+        video: VideoFileClip, 
+        tag_text_map: Dict[str, str], 
+        tag_config: Dict[str, Dict[str, Any]], 
+        duration_per_tag: Union[float, Dict[str, float]], 
+        config: Dict
+    ) -> CompositeVideoClip:
         """
-        添加字幕到视频 - 使用subtitle_utils的实现
+        添加per-tag字幕到视频
         
         Args:
             video: 视频片段
-            text: 字幕文本
+            tag_text_map: 每个标签的文案映射 {tag_name: text}
+            tag_config: 标签配置
+            duration_per_tag: 每个标签的时长
             config: 字幕配置
             
         Returns:
             带字幕的视频
         """
-        self.logger.info("添加字幕...")
-        
-        # 如果启用阿里云字幕API，生成配置文件
-        if self.use_aliyun_subtitle and self.aliyun_subtitle_api:
-            aliyun_subtitle_json = self._create_aliyun_subtitles(video, text, config)
-            if aliyun_subtitle_json:
-                # 保存阿里云字幕配置到文件
-                output_dir = Path("output/aliyun_subtitles")
-                output_dir.mkdir(parents=True, exist_ok=True)
-                subtitle_file = output_dir / f"subtitle_{hash(text) % 1000000}.json"
-                with open(subtitle_file, 'w', encoding='utf-8') as f:
-                    f.write(aliyun_subtitle_json)
-                self.logger.info(f"阿里云字幕配置已保存到: {subtitle_file}")
-        
-        # 同时使用本地MoviePy添加字幕到视频中
-        self.logger.info("使用本地MoviePy添加字幕...")
-        
-        # 分割文本为适合显示的片段
-        segments = split_text_for_progressive_subtitles(text, max_chars_per_line=25, max_lines=2)
-        
-        # 计算每个片段的显示时间
-        timings = calculate_progressive_subtitle_timings(video.duration, segments)
+        self.logger.info("添加per-tag字幕...")
         
         # 获取项目根目录的字体文件
         project_root = Path(__file__).parent.parent.parent
         font_path = project_root / "江西拙楷2.0.ttf"
         
-        # 创建字幕剪辑（支持九宫格位置）
-        subtitle_clips = create_subtitle_clips(
-            segments=segments,
-            timings=timings,
-            font=str(font_path) if font_path.exists() else config.get('font', 'Arial'),
-            font_size=config.get('font_size', 48),
-            color=config.get('color', 'white'),
-            stroke_color=config.get('stroke_color', 'black'),
-            stroke_width=config.get('stroke_width', 2),
-            grid_position=config.get('grid_position', 8)  # 添加九宫格位置参数
-        )
+        all_subtitle_clips = []
+        current_time = 0.0
+        tags = list(tag_config.keys())
         
-        # 合成视频和字幕
-        if subtitle_clips:
-            return CompositeVideoClip([video] + subtitle_clips)
+        for tag in tags:
+            # 获取当前标签的时长
+            if isinstance(duration_per_tag, dict):
+                tag_duration = duration_per_tag.get(tag, 5.0)
+            else:
+                tag_duration = duration_per_tag
+            
+            # 获取当前标签的文案
+            text = tag_text_map.get(tag, '')
+            if not text.strip():
+                self.logger.warning(f"标签 {tag} 没有文案，跳过字幕")
+                current_time += tag_duration
+                continue
+            
+            self.logger.info(f"为标签 {tag} 添加字幕: {text[:30]}... [时间: {current_time:.1f}s - {current_time + tag_duration:.1f}s]")
+            
+            # 如果启用阿里云字幕API，生成配置文件（仅保存，不应用）
+            if self.use_aliyun_subtitle and self.aliyun_subtitle_api:
+                # 创建一个临时视频对象用于阿里云API
+                temp_video = video.subclipped(current_time, min(current_time + tag_duration, video.duration))
+                aliyun_subtitle_json = self._create_aliyun_subtitles(temp_video, text, config)
+                if aliyun_subtitle_json:
+                    output_dir = Path("output/aliyun_subtitles")
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    subtitle_file = output_dir / f"subtitle_{tag}_{hash(text) % 1000000}.json"
+                    with open(subtitle_file, 'w', encoding='utf-8') as f:
+                        f.write(aliyun_subtitle_json)
+                    self.logger.info(f"阿里云字幕配置已保存到: {subtitle_file}")
+            
+            # 使用本地MoviePy添加字幕到视频中
+            segments = split_text_for_progressive_subtitles(text, max_chars_per_line=25, max_lines=2)
+            
+            # 计算每个片段的显示时间（基于当前标签的时长）
+            timings = calculate_progressive_subtitle_timings(tag_duration, segments)
+            
+            # 创建字幕剪辑（支持九宫格位置）
+            tag_subtitle_clips = create_subtitle_clips(
+                segments=segments,
+                timings=timings,
+                font=str(font_path) if font_path.exists() else config.get('font', 'Arial'),
+                font_size=config.get('font_size', 48),
+                color=config.get('color', 'white'),
+                stroke_color=config.get('stroke_color', 'black'),
+                stroke_width=config.get('stroke_width', 2),
+                grid_position=config.get('grid_position', 8)
+            )
+            
+            # 调整字幕剪辑的时间偏移
+            for clip in tag_subtitle_clips:
+                adjusted_clip = clip.with_start(clip.start + current_time)
+                all_subtitle_clips.append(adjusted_clip)
+            
+            current_time += tag_duration
+        
+        # 合成视频和所有字幕
+        if all_subtitle_clips:
+            self.logger.info(f"共创建了 {len(all_subtitle_clips)} 个字幕剪辑")
+            return CompositeVideoClip([video] + all_subtitle_clips)
         else:
+            self.logger.warning("没有创建任何字幕剪辑")
             return video
     
     def _add_dynamic_tags(
