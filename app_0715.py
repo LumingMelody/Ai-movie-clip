@@ -115,6 +115,7 @@ from core.cliptemplate.coze.video_cover_analyzer import CoverAnalyzer, AnalyzeRe
 from core.cliptemplate.coze.auto_live_reply import SocketServer, WebSocketClient, config_manager
 from websocket_client import ManualWebSocketClient
 from core.cliptemplate.coze.video_advertsment import get_video_advertisement
+from video_cut.tag_video_generator.api_handler import TagVideoAPIHandler
 from core.cliptemplate.coze.video_advertsment_enhance import get_video_advertisement_enhance
 from core.cliptemplate.coze.video_big_word import get_big_word
 from core.cliptemplate.coze.video_catmeme import get_video_catmeme
@@ -3788,6 +3789,201 @@ async def video_natural_language_edit(request: NaturalLanguageVideoEditRequest):
             
         except Exception as e:
             error_res = {"error": str(e), "function_name": "natural_language_video_edit"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 同步模式
+        return await process()
+
+
+# 添加标签视频生成接口
+class TagVideoRequest(BaseModel):
+    """标签视频生成请求模型"""
+    tags: List[str] = Field(..., description="标签列表，按顺序处理")
+    tag_videos: Dict[str, Dict[str, List[str]]] = Field(..., description="标签到视频列表的映射")
+    text_content: Optional[str] = Field(None, description="文案内容，不提供则AI生成")
+    subtitle_config: Optional[Dict[str, Any]] = Field(None, description="字幕配置")
+    dynamic_tags: Optional[List[str]] = Field(None, description="动态标签列表")
+    duration_per_tag: Union[float, Dict[str, float]] = Field(5.0, description="每个标签的时长（秒），可以是统一时长或每个标签单独设置")
+    output_format: Optional[Dict[str, Any]] = Field(None, description="输出格式配置")
+    mode: str = Field("sync", description="处理模式: sync/async")
+
+# 初始化标签视频处理器
+tag_video_handler = TagVideoAPIHandler()
+
+@app.post("/video/generate-from-tags")
+async def generate_video_from_tags(request: TagVideoRequest):
+    """
+    根据标签生成视频
+    
+    请求示例:
+    {
+        "tags": ["黄山风景", "徽州特色餐", "屯溪老街", "无边泳池", "峡谷漂流"],
+        "tag_videos": {
+            "黄山风景": {
+                "video": ["assets/videos/huangshan.mp4", "assets/videos/huangshan1.mp4"]
+            },
+            "徽州特色餐": {
+                "video": ["assets/videos/huizhoucai.mp4"]
+            },
+            "屯溪老街": {
+                "video": ["assets/videos/tunxi.mp4", "assets/videos/tunxi1.mp4"]
+            },
+            "无边泳池": {
+                "video": ["assets/videos/wubianyongchi1.mp4", "assets/videos/wubianyongchi2.mp4"]
+            },
+            "峡谷漂流": {
+                "video": ["assets/videos/xiagupiaoliu1.mp4"]
+            }
+        },
+        "text_content": "探索黄山美景，品味徽州美食，漫步千年古街",  // 可选，不提供则AI生成
+        "subtitle_config": {  // 可选
+            "font_size": 48,
+            "color": "white",
+            "position": ["center", "bottom"],
+            "margin": 50
+        },
+        "dynamic_tags": ["黄山", "美食", "古街", "泳池", "漂流"],  // 可选
+        "duration_per_tag": 5.0,
+        "output_format": {  // 可选
+            "fps": 30,
+            "resolution": [1920, 1080]
+        },
+        "mode": "sync"
+    }
+    """
+    mode = request.mode
+    urlpath = request.dict().get('urlpath', '')
+    
+    # 定义处理函数
+    async def process():
+        try:
+            print(f"[DEBUG] 收到标签视频生成请求: tags={request.tags}")
+            
+            # 处理请求
+            result = tag_video_handler.handle_request(request.dict())
+            
+            # 检查结果
+            if not result:
+                print("[ERROR] tag_video_handler返回None")
+                error_res = {"error": "视频生成处理返回空结果", "function_name": "generate_from_tags"}
+                return format_response(error_res, mode="sync", error_type="general_exception")
+            
+            print(f"[DEBUG] 处理结果: success={result.get('success')}, error={result.get('error')}")
+            
+            if result.get('success'):
+                # 如果有视频路径，尝试上传到OSS
+                if 'video_path' in result:
+                    try:
+                        # 上传到OSS
+                        local_path = result['video_path']
+                        oss_filename = f"tag_videos/{datetime.now().strftime('%Y%m%d')}/{Path(local_path).name}"
+                        upload_success = upload_to_oss(local_path, oss_filename)
+                        
+                        if upload_success:
+                            video_url = f"https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/{oss_filename}"
+                            print(f"✅ [TAG-VIDEO] OSS上传成功，访问链接: {video_url}")
+                            
+                            # 计算总时长
+                            if isinstance(request.duration_per_tag, dict):
+                                # 如果是字典，计算所有标签时长的和
+                                total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
+                            else:
+                                # 如果是数字，乘以标签数量
+                                total_duration = request.duration_per_tag * len(request.tags)
+                            
+                            # 使用enhance_endpoint_result格式化响应
+                            enhanced_result = {
+                                'video_url': video_url,
+                                'video_path': local_path,
+                                'oss_path': oss_filename,
+                                'tags': request.tags,
+                                'duration_per_tag': request.duration_per_tag,
+                                'total_duration': total_duration,
+                                'text_content': result.get('text_content', request.text_content),
+                                'message': '视频生成成功'
+                            }
+                            
+                            return enhance_endpoint_result(
+                                enhanced_result, 
+                                "generate_from_tags", 
+                                request,
+                                is_digital_human=False
+                            )
+                        else:
+                            # 计算总时长
+                            if isinstance(request.duration_per_tag, dict):
+                                total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
+                            else:
+                                total_duration = request.duration_per_tag * len(request.tags)
+                            
+                            # 上传失败但本地生成成功
+                            enhanced_result = {
+                                'video_path': local_path,
+                                'tags': request.tags,
+                                'duration_per_tag': request.duration_per_tag,
+                                'total_duration': total_duration,
+                                'message': '视频生成成功（OSS上传失败）'
+                            }
+                            return enhance_endpoint_result(
+                                enhanced_result,
+                                "generate_from_tags",
+                                request,
+                                is_digital_human=False
+                            )
+                    except Exception as e:
+                        print(f"上传OSS失败: {e}")
+                        
+                        # 计算总时长
+                        if isinstance(request.duration_per_tag, dict):
+                            total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
+                        else:
+                            total_duration = request.duration_per_tag * len(request.tags)
+                        
+                        # 返回本地路径
+                        enhanced_result = {
+                            'video_path': result['video_path'],
+                            'tags': request.tags,
+                            'duration_per_tag': request.duration_per_tag,
+                            'total_duration': total_duration,
+                            'message': '视频生成成功（OSS上传失败）'
+                        }
+                        return enhance_endpoint_result(
+                            enhanced_result,
+                            "generate_from_tags",
+                            request,
+                            is_digital_human=False
+                        )
+                else:
+                    # 没有video_path，返回错误
+                    error_res = {"error": "生成的结果中没有视频路径", "function_name": "generate_from_tags"}
+                    return format_response(error_res, mode="sync", error_type="general_exception")
+            else:
+                # 处理失败
+                error_res = {"error": result.get('error', '生成失败'), "function_name": "generate_from_tags"}
+                return format_response(error_res, mode="sync", error_type="general_exception")
+                
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_from_tags"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    
+    # 处理异步模式
+    if mode == "async":
+        try:
+            # 准备异步任务参数
+            args = request.dict()
+            
+            # 提交异步任务
+            task_id = await task_manager.submit_task(
+                func_name="process_tag_video_generation",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_from_tags"}
             return format_response(error_res, mode="sync", error_type="general_exception")
     else:
         # 同步模式
