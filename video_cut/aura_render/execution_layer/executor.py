@@ -308,7 +308,7 @@ class AuraExecutor:
                 clip = CompositeVideoClip([bg, clip.with_position('center')])
                 
         elif layer_type == 'text':
-            # 创建文字图层 - 使用与 app_0715.py 相同的方式
+            # 创建文字图层 - 使用与 app.py 相同的方式
             content = layer.get('content', '')
             style = layer.get('style', {})
             
@@ -322,12 +322,12 @@ class AuraExecutor:
             else:
                 font_to_use = 'Arial-Unicode-MS'  # macOS 系统中文字体
             
-            # 使用与 app_0715.py 相同的字幕创建方式
+            # 使用与 app.py 相同的字幕创建方式
             clip = TextClip(
                 text=content,
                 font=font_to_use,
                 font_size=style.get('size', 50),
-                color=style.get('color', 'Yellow'),  # 使用黄色，与 app_0715.py 一致
+                color=style.get('color', 'Yellow'),  # 使用黄色，与 app.py 一致
                 stroke_color='black',
                 stroke_width=2,
                 size=(1000, None),

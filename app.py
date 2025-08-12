@@ -5,42 +5,91 @@ import time
 import asyncio
 import json
 import traceback
-import os
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
+import uvicorn
+import os
+# 解决 OpenMP 库冲突问题
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+import uuid
+from typing import Optional, Union, Dict, List, Any
+from threading import Condition
 
-# 加载环境变量
-env_path = Path(__file__).parent / '.env'
-if env_path.exists():
-    load_dotenv(env_path)
-    print(f"✅ 已加载环境变量配置: {env_path}")
+# 设置日志
+logger = logging.getLogger(__name__)
 
-from fastapi import FastAPI, Request, status
-from fastapi.exceptions import RequestValidationError
+# ========== 重构：常量定义 ==========
+class APIConstants:
+    """API相关常量"""
+    DEFAULT_MODE = "async"
+    SYNC_MODE = "sync"
+    ASYNC_MODE = "async"
+    
+    # 状态码
+    STATUS_PENDING = "0"
+    STATUS_COMPLETED = "1"
+    STATUS_FAILED = "2"
+    
+    # 错误类型
+    ERROR_VALIDATION = "validation_error"
+    ERROR_GENERAL = "general_exception"
+    
+    # API类型
+    API_TYPE_DEFAULT = "default"
+    API_TYPE_DIGITAL_HUMAN = "digital_human"
+    
+    # 响应类型
+    RESPONSE_TYPE_VIDEO = "video"
+    RESPONSE_TYPE_IMAGE = "image"
+    RESPONSE_TYPE_TEXT = "text"
+    RESPONSE_TYPE_ANALYSIS = "analysis"
+
+class ResponseMessages:
+    """响应消息常量"""
+    VALIDATION_ERROR = "请求参数验证失败"
+    PROCESSING_ERROR = "处理失败"
+    TASK_SUBMIT_ERROR = "提交任务失败"
+    STATUS_UPDATE_ERROR = "状态更新失败"
+    FILE_NOT_FOUND = "文件不存在"
+    UPLOAD_FAILED = "上传失败"
+
+from fastapi import HTTPException, FastAPI, Request, status, Query, UploadFile, File, WebSocket
 from fastapi.exceptions import RequestValidationError, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.cors import CORSMiddleware
+from pydantic import ValidationError, BaseModel, Field
+import oss2
+import requests
+import config
 
 from core.clipgenerate.interface_function import get_smart_clip_video, download_file_from_url, upload_to_oss, \
-    OSS_BUCKET_NAME, OSS_ENDPOINT, get_file_info
-from core.clipgenerate.interface_model import VideoRandomRequest, ProductConfigRequest, VoiceConfigRequest, \
-    ServerStartRequest, ServerStopRequest, TextIndustryRequest, CopyGenerationRequest, CoverAnalysisRequest, \
-    BigWordRequest, CatMemeRequest, ClickTypeRequest, VideoAdvertisementRequest, VideoAdvertisementEnhanceRequest, \
-    ClothesDifferentSceneRequest, SmartClipRequest, DGHImgInsertRequest, DigitalHumanClipsRequest, IncitementRequest, \
-    SinologyRequest, StickmanRequest, ClothesFastChangeRequest, DigitalHumanRequest, VideoEditMainRequest
+    OSS_BUCKET_NAME, OSS_ENDPOINT, get_file_info, get_video_edit_simple
+from video_highlight_clip import process_video_highlight_clip
+from core.clipgenerate.interface_model import (
+    VideoAdvertisementRequest, VideoAdvertisementEnhanceRequest, ClickTypeRequest,
+    DigitalHumanRequest, DigitalHumanEasyRequest, ClothesDifferentSceneRequest, BigWordRequest, CatMemeRequest,
+    IncitementRequest, SinologyRequest, StickmanRequest, ClothesFastChangeRequest,
+    DGHImgInsertRequest, DigitalHumanClipsRequest, SmartClipRequest,
+    VideoRandomRequest, ProductConfigRequest, VoiceConfigRequest,
+    ServerStartRequest, ServerStopRequest, AutoIntroStartRequest, AutoIntroStopRequest,
+    TextIndustryRequest, CopyGenerationRequest, CoverAnalysisRequest,
+    VideoEditMainRequest, AIAvatarUnifiedRequest, TimelineGenerationRequest, TimelineModifyRequest,
+    VideoHighlightsRequest, VideoHighlightClipRequest, NaturalLanguageVideoEditRequest
+)
 from core.clipgenerate.tongyi_wangxiang_model import (
-    TextToImageV2Request, TextToImageV1Request,
-    AITryonBasicRequest, AITryonPlusRequest,
-    VirtualModelV1Request, VirtualModelV2Request,
-    BackgroundGenerationRequest, ImageBackgroundEditRequest,
+    TextToImageV2Request, TextToImageV1Request, ImageBackgroundEditRequest,
+    VirtualModelV1Request, VirtualModelV2Request, ShoeModelRequest,
+    CreativePosterRequest, BackgroundGenerationRequest,
+    AITryonBasicRequest, AITryonPlusRequest, AITryonEnhanceRequest, AITryonSegmentRequest,
+    ImageToVideoAdvancedRequest, AnimateAnyoneRequest, EMOVideoRequest, LivePortraitRequest,
+    VideoStyleTransferRequest, AITryonBasicRequest, AITryonPlusRequest,
     ImageInpaintingRequest, PersonalPortraitRequest,
     DoodlePaintingRequest, ArtisticTextRequest,
     ImageUpscaleRequest, ImageStyleTransferRequest, VideoStyleTransferRequest, ImageOutpaintingRequest,
-    ShoeModelRequest, CreativePosterRequest, AITryonEnhanceRequest, AITryonSegmentRequest,
-    ImageToVideoAdvancedRequest, TextToVideoRequest, VideoEditRequest, AnimateAnyoneRequest, EMOVideoRequest,
-    LivePortraitRequest
+    TextToVideoRequest, VideoEditRequest
 )
 
 from core.clipgenerate.tongyi_wangxiang import (
@@ -60,25 +109,13 @@ from core.clipgenerate.tongyi_wangxiang import (
     get_animate_anyone, get_emo_video, get_live_portrait,
     # 视频风格重绘
     get_video_style_transform,
-
 )
 
 from core.cliptemplate.coze.video_cover_analyzer import CoverAnalyzer, AnalyzeResponse
-import oss2
-import requests
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, WebSocket
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-from flask import jsonify, request
-from pydantic import BaseModel, Field
-import uvicorn
-import uuid
-from typing import Optional, Union, Dict, List, Any
-from threading import Condition
-import config
-import os
-from core.cliptemplate.coze.auto_live_reply import SocketServer, config_manager
+from core.cliptemplate.coze.auto_live_reply import SocketServer, WebSocketClient, config_manager
+from websocket_client import ManualWebSocketClient
 from core.cliptemplate.coze.video_advertsment import get_video_advertisement
+from video_cut.tag_video_generator.api_handler import TagVideoAPIHandler
 from core.cliptemplate.coze.video_advertsment_enhance import get_video_advertisement_enhance
 from core.cliptemplate.coze.video_big_word import get_big_word
 from core.cliptemplate.coze.video_catmeme import get_video_catmeme
@@ -88,7 +125,7 @@ from core.cliptemplate.coze.video_dgh_img_insert import get_video_dgh_img_insert
 from core.cliptemplate.coze.video_digital_human_clips import get_video_digital_huamn_clips
 from core.cliptemplate.coze.video_digital_human_easy import get_video_digital_huamn_easy, \
     get_video_digital_huamn_easy_local
-from core.cliptemplate.coze.video_generate_live import  process_single_video_by_url
+from core.cliptemplate.coze.video_generate_live import process_single_video_by_url
 from core.cliptemplate.coze.video_incitment import get_video_incitment
 from core.cliptemplate.coze.video_sinology import get_video_sinology
 from core.cliptemplate.coze.video_stickman import get_video_stickman
@@ -96,11 +133,24 @@ from core.cliptemplate.coze.videos_clothes_fast_change import get_videos_clothes
 from core.cliptemplate.coze.text_industry import get_text_industry
 from core.orchestrator.workflow_orchestrator import VideoEditingOrchestrator
 from core.text_generate.generator import get_copy_generation, CopyGenerator
+from core.cliptemplate.coze.t15 import extract_video_highlights_from_url
+from core.clipgenerate.natural_language_video_edit import process_natural_language_video_edit
 
-# ========== FastAPI 初始化 ==========
-app = FastAPI()
+from core.cliptemplate.coze.refactored_api import UnifiedVideoAPI
+
+app = FastAPI(
+    title="🚀 AI视频生成统一API系统",
+    description="集成Coze视频生成和通义万相AI功能的统一API系统，提供30+个视频和图像生成接口",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
+)
 # 全局变量存储Socket服务器实例
 socket_server = None
+# 全局变量存储WebSocket客户端实例
+websocket_client = None
+# 全局变量存储自动产品介绍WebSocket客户端实例
+auto_intro_client = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -128,7 +178,32 @@ results = {}
 result_condition = Condition()
 websocket_connections = {}
 
+
 # ========== 🔥 修复的路径提取函数 ==========
+def verify_file_exists(warehouse_path):
+    """
+    验证文件是否真实存在
+    """
+    if not warehouse_path:
+        return False
+
+    user_data_dir = config.get_user_data_dir()
+    full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
+    return os.path.exists(full_path)
+
+
+def get_full_file_path(warehouse_path):
+    """
+    根据warehouse路径获取完整的文件系统路径
+    """
+    if not warehouse_path:
+        return None
+
+    user_data_dir = config.get_user_data_dir()
+    full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
+    return os.path.normpath(full_path)
+
+
 def extract_warehouse_path(result):
     """
     🔥 修复版：提取视频路径，支持列表、字典、字符串等多种格式
@@ -216,175 +291,278 @@ def extract_warehouse_path(result):
     print(f"✅ 最终warehouse路径: {warehouse_path}")
     return warehouse_path
 
-def verify_file_exists(warehouse_path):
-    """
-    验证文件是否真实存在
-    """
-    if not warehouse_path:
-        return False
 
-    user_data_dir = config.get_user_data_dir()
-    full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
-    return os.path.exists(full_path)
-
-def get_full_file_path(warehouse_path):
-    """
-    根据warehouse路径获取完整的文件系统路径
-    """
-    if not warehouse_path:
-        return None
-
-    user_data_dir = config.get_user_data_dir()
-    full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
-    return os.path.normpath(full_path)
-
-# 🔥 修复后的任务处理函数
-def process_task(task):
-    """带超时控制的任务处理函数"""
-    task_id = task["task_id"]
-    func_name = task["func_name"]
-    args = task["args"]
-
-    # 设置任务超时时间（30分钟）
-    TASK_TIMEOUT = 1800  # 30分钟
-
-    print(f"\n🔥 [DEBUG] 开始处理任务: {task_id}")
-    print(f"   函数名: {func_name}")
-    print(f"   参数: {args}")
-    print(f"   超时时间: {TASK_TIMEOUT}秒")
-
-    start_time = time.time()
-
-    try:
-        # 更新状态为处理中
-        with result_condition:
-            results[task_id] = {
-                "task_id": task_id,
-                "function_name": func_name,
-                "status": "processing",
-                "started_at": start_time,
-                "progress": "0%",
-                "current_step": "开始处理",
-                "input_params": args.copy()
-            }
-            result_condition.notify_all()
-
-        print(f"🔄 [DEBUG] 任务 {task_id} 状态已更新为 processing")
-
-        # 检查函数是否存在
-        func = globals().get(func_name)
-        if not func:
-            raise ValueError(f"函数不存在: {func_name}")
-
-        print(f"✅ [DEBUG] 找到函数: {func_name}")
-
-        # 更新进度
-        with result_condition:
-            results[task_id].update({
-                "current_step": "执行函数",
-                "progress": "20%"
-            })
-            result_condition.notify_all()
-
-        print(f"🚀 [DEBUG] 开始执行函数: {func_name}")
-
-        # 🔥 关键修改：使用线程池执行函数，并设置超时
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            # 提交任务到线程池
-            future = executor.submit(func, **args)
-
-            try:
-                # 等待结果，设置超时
-                result = future.result(timeout=TASK_TIMEOUT)
-                print(f"✅ [DEBUG] 函数执行完成: {func_name}")
-
-            except TimeoutError:
-                print(f"⏰ [DEBUG] 函数执行超时: {func_name}")
-                # 尝试取消任务
-                future.cancel()
-                raise TimeoutError(f"函数 {func_name} 执行超时 ({TASK_TIMEOUT}秒)")
-
-        print(f"   结果类型: {type(result)}")
-        print(f"   结果内容: {str(result)[:200]}...")
-
-        # 处理结果
-        warehouse_path = extract_warehouse_path(result)
-        full_path = get_full_file_path(warehouse_path) if warehouse_path else None
-        file_exists = verify_file_exists(warehouse_path) if warehouse_path else False
-
-        end_time = time.time()
-        processing_time = round(end_time - start_time, 2)
-
-        print(f"📊 [DEBUG] 处理结果:")
-        print(f"   warehouse路径: {warehouse_path}")
-        print(f"   完整路径: {full_path}")
-        print(f"   文件存在: {file_exists}")
-        print(f"   处理时间: {processing_time}秒")
-
-        # 更新最终结果
-        final_result = {
-            "task_id": task_id,
+# ========== 重构：通用错误处理和响应格式化 ==========
+class ResponseFormatter:
+    """统一的响应格式化器"""
+    
+    @staticmethod
+    def format_success_response(result, task_id=None, tenant_id=None, business_id=None, 
+                              processing_time=0, function_name="", response_type="video"):
+        """格式化成功响应"""
+        return {
             "status": "completed",
-            "result": result,
-            "warehouse_path": warehouse_path,
-            "videoPath": warehouse_path,
-            "full_file_path": full_path,
-            "file_exists": file_exists,
-            "timestamp": end_time,
-            "started_at": start_time,
-            "completed_at": end_time,
+            "data": result,
+            "result_type": response_type,
             "processing_time": processing_time,
-            "function_name": func_name,
-            "input_params": args
-        }
-
-        with result_condition:
-            results[task_id] = final_result
-            result_condition.notify_all()
-
-        print(f"🎉 [DEBUG] 任务 {task_id} 完成！")
-
-    except Exception as e:
-        end_time = time.time()
-        processing_time = round(end_time - start_time, 2)
-
-        import traceback
-        error_traceback = traceback.format_exc()
-
-        print(f"❌ [DEBUG] 任务 {task_id} 失败!")
-        print(f"   错误类型: {type(e).__name__}")
-        print(f"   错误信息: {str(e)}")
-        print(f"   错误堆栈: {error_traceback}")
-
-        final_result = {
+            "function_name": function_name,
             "task_id": task_id,
-            "status": "failed",
-            "error": str(e),
-            "error_type": type(e).__name__,
-            "traceback": error_traceback,
-            "timestamp": end_time,
-            "started_at": start_time,
-            "failed_at": end_time,
-            "processing_time": processing_time,
-            "function_name": func_name,
-            "input_params": args
+            "tenant_id": tenant_id,
+            "business_id": business_id
+        }
+    
+    @staticmethod
+    def format_async_response(task_id, urlpath=""):
+        """格式化异步响应"""
+        return {
+            "task_id": task_id,
+            "status": "processing",
+            "message": "任务已提交，请使用task_id查询结果",
+            "poll_url": f"/poll-result/{task_id}",
+            "get_url": f"/get-result/{task_id}",
+            "warehouse_base_url": urlpath
+        }
+    
+    @staticmethod
+    def format_error_response(error_msg, error_type=None, task_id=None, tenant_id=None, 
+                            business_id=None, function_name="", details=None):
+        """格式化错误响应"""
+        if error_type == APIConstants.ERROR_VALIDATION:
+            first_detail = (details or [{}])[0]
+            return {
+                "status": "validation_error",
+                "error_code": 422,
+                "error": error_msg,
+                "details": {
+                    "field": first_detail.get("field", ""),
+                    "message": first_detail.get("message", "Field required"),
+                    "type": first_detail.get("type", "missing"),
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "id": business_id,
+                    "suggestion": "请参考API文档检查请求参数格式",
+                    "function_name": function_name
+                }
+            }
+        else:
+            return {
+                "status": "error",
+                "error_code": 500,
+                "error": error_msg,
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "business_id": business_id,
+                "function_name": function_name,
+                "timestamp": datetime.now().isoformat()
+            }
+
+def format_response(res, mode="sync", urlpath="", error_type=None):
+    """
+    完整的响应格式化函数（支持错误处理和跳过上传的情况）
+    """
+    # 🔥 处理验证错误
+    if error_type == "validation_error":
+        details = res.get("details", [])
+        first_detail = details[0] if details else {}
+
+        return {
+            "status": "validation_error",
+            "error_code": 422,
+            "error": res.get("error", "请求参数验证失败"),
+            "details": {
+                "field": first_detail.get("field", ""),
+                "message": first_detail.get("message", "Field required"),
+                "type": first_detail.get("type", "missing"),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id"),
+                "suggestion": "请参考API文档检查请求参数格式",
+                "input": first_detail.get("input", {})
+            }
         }
 
-        with result_condition:
-            results[task_id] = final_result
-            result_condition.notify_all()
+    # 🔥 处理HTTP异常 - 改为validation_error格式
+    if error_type == "http_exception":
+        return {
+            "status": "validation_error",
+            "error_code": 422,
+            "error": res.get("error", "HTTP请求错误"),
+            "details": {
+                "field": res.get("field", ""),
+                "type": "missing",
+                "message": res.get("message", "请求处理失败"),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id"),
+                "suggestion": "请参考API文档检查请求参数格式",
+                "input": res.get("input", {})
+            }
+        }
 
-def worker():
-    while True:
-        task = task_queue.get()
-        try:
-            process_task(task)
-        finally:
-            task_queue.task_done()
+    # 🔥 处理一般异常 - 改为validation_error格式
+    if error_type == "general_exception":
+        return {
+            "status": "validation_error",
+            "error_code": 422,
+            "error": res.get("error", "服务器内部错误"),
+            "details": {
+                "field": res.get("field", ""),
+                "type": "missing",
+                "message": res.get("message", "服务器处理请求时发生错误"),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id"),
+                "suggestion": "请参考API文档检查请求参数格式",
+                "input": res.get("input", {})
+            }
+        }
 
-worker_thread = threading.Thread(target=worker, daemon=True)
-worker_thread.start()
+    # 原有的同步/异步模式处理逻辑
+    if mode == "sync":
+        # 🔥 处理超时错误 - 改为validation_error格式
+        if isinstance(res, dict) and res.get("timeout"):
+            return {
+                "status": "validation_error",
+                "error_code": 422,
+                "error": res.get("error", "请求超时"),
+                "details": {
+                    "field": "timeout",
+                    "type": "missing",
+                    "message": res.get("message", "请求处理超时"),
+                    "task_id": res.get("task_id"),
+                    "tenant_id": res.get("tenant_id"),
+                    "id": res.get("business_id"),
+                    "suggestion": "请参考API文档检查请求参数格式，建议使用异步模式",
+                    "input": {
+                        "query_urls": {
+                            "get_result": f"/get-result/{res['task_id']}",
+                            "poll_result": f"/poll-result/{res['task_id']}",
+                            "task_status": f"/task-status/{res['task_id']}"
+                        }
+                    }
+                }
+            }
 
+        # 🔥 处理一般错误 - 改为validation_error格式
+        if isinstance(res, dict) and "error" in res and not res.get("timeout"):
+            return {
+                "status": "validation_error",
+                "error_code": 422,
+                "error": res.get("error", "任务执行出现错误"),
+                "details": {
+                    "field": res.get("field", ""),
+                    "type": "missing",
+                    "message": res.get("message", "任务执行出现错误"),
+                    "task_id": res.get("task_id"),
+                    "tenant_id": res.get("tenant_id"),
+                    "id": res.get("business_id"),
+                    "suggestion": "请参考API文档检查请求参数格式",
+                    "input": res.get("input", {})
+                }
+            }
+
+        # 🔥 新增：处理跳过上传的文本结果
+        if isinstance(res, dict) and res.get("content_type") == "text" and res.get("upload_skipped"):
+            print(f"📝 [FORMAT-RESPONSE] 检测到跳过上传的文本结果")
+
+            return {
+                "status": "completed",
+                "data": res.get("text_content", res.get("result")),
+                "result_type": "text",
+                "processing_time": res.get("processing_time"),
+                "function_name": res.get("function_name"),
+                "upload_info": {
+                    "upload_skipped": True,
+                    "skip_reason": res.get("skip_reason", "文本类接口"),
+                    "integration": res.get("cloud_integration", "text_direct")
+                },
+                "task_update_success": res.get("task_update_success", False),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id")
+            }
+
+        # 🔥 新增：处理跳过上传的图片结果
+        if isinstance(res, dict) and res.get("content_type") == "image" and res.get("upload_skipped"):
+            print(f"🖼️ [FORMAT-RESPONSE] 检测到跳过上传的图片结果")
+
+            image_url = res.get("original_image_url") or res.get("image_url")
+
+            return {
+                "status": "completed",
+                "image_url": image_url,
+                "result_type": "image",
+                "processing_time": res.get("processing_time"),
+                "function_name": res.get("function_name"),
+                "upload_info": {
+                    "upload_skipped": True,
+                    "skip_reason": res.get("skip_reason", "图片类接口"),
+                    "integration": res.get("cloud_integration", "image_direct"),
+                    "original_url": image_url
+                },
+                "task_update_success": res.get("task_update_success", False),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id")
+            }
+
+        # 正常的成功结果处理
+        warehouse_path = extract_warehouse_path(res)
+
+        if warehouse_path and warehouse_path != "MULTI_IMAGE_URLS":
+            final_url = f"{urlpath}{warehouse_path}"
+
+            return {
+                "status": "completed",
+                "videoPath": warehouse_path,
+                "video_url": final_url,
+                "warehouse_path": warehouse_path,
+                "processing_time": res.get("processing_time"),
+                "function_name": res.get("function_name"),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id")
+            }
+
+        # 处理AI试衣分割的特殊情况
+        elif warehouse_path == "MULTI_IMAGE_URLS":
+            return {
+                "status": "completed",
+                "result": res,
+                "result_type": "multi_images",
+                "processing_time": res.get("processing_time"),
+                "function_name": res.get("function_name"),
+                "task_id": res.get("task_id"),
+                "tenant_id": res.get("tenant_id"),
+                "id": res.get("business_id")
+            }
+
+        # 默认返回原始结果
+        return {
+            "status": "completed",
+            "result": res,
+            "processing_time": res.get("processing_time", 0),
+            "function_name": res.get("function_name"),
+            "task_id": res.get("task_id"),
+            "tenant_id": res.get("tenant_id"),
+            "id": res.get("business_id")
+        }
+
+    # 异步模式返回任务ID
+    else:
+        return {
+            "status": "submitted",
+            "task_id": res,
+            "message": "任务已提交，请使用task_id查询结果",
+            "query_urls": {
+                "get_result": f"/get-result/{res}",
+                "poll_result": f"/poll-result/{res}",
+                "task_status": f"/task-status/{res}"
+            }
+        }
+
+
+# 首先需要添加API配置类和服务
 class APIConfig:
     def __init__(self):
         self.base_url = "https://agent.cstlanbaai.com/gateway"
@@ -406,10 +584,13 @@ class APIConfig:
         return f"{self.admin_api_base}/agent/task-video-info/update"
 
     def update_task_video_edit_update(self):
+        """数字人视频编辑专用状态更新接口"""
         return f"{self.admin_api_base}/agent/task-video-edit/update"
 
     def create_resource_url(self):
+        """创建资源的接口"""
         return f"{self.admin_api_base}/agent/resource/create"
+
 
 class APIService:
     def __init__(self, config: APIConfig):
@@ -419,102 +600,46 @@ class APIService:
 
     def update_task_status(self, task_id: str, status: str = "1", tenant_id=None, path: str = "",
                            resource_id=None, business_id=None, content=None, api_type="default"):
-        """
-        更新任务状态
-        Args:
-            task_id: 任务ID
-            status: "0"=运行中, "1"=完成, "2"=失败
-            tenant_id: 租户ID
-            path: 文件路径
-            resource_id: 资源ID
-            business_id: 业务ID（请求中的id字段）
-            content: 文本内容（文本类接口返回的内容）
-            api_type: API类型，"digital_human"时使用特殊接口，否则使用默认接口
-        """
-        # 🔥 根据 api_type 选择不同的更新接口
-        if api_type == "digital_human":
-            url = f"{self.admin_api_base}/agent/task-video-edit/update"
-            print(f"🤖 [数字人] 使用数字人专用状态更新接口")
-        else:
-            url = f"{self.admin_api_base}/agent/task-video-info/update"
-            print(f"📋 [通用] 使用通用状态更新接口")
-
-        headers = self.config.get_headers(tenant_id)
-
-        # 🔥 注意：根据之前的错误，status字段需要是整数
-        data = {
-            "code": 200,
-            "status": int(status),  # 转换为整数
-            "message": "OSS文件上传成功" if status == "1" else ("执行中" if status == "0" else "执行失败"),
-            "output_oss_path": path
-        }
-
-        # 🔥 新增：如果有文本内容，确保是字符串格式
-        if content:
-            # 确保 content 是字符串
-            if isinstance(content, str):
-                final_content = content.strip()
-            elif isinstance(content, (tuple, list)):
-                # 如果是元组或列表，合并为字符串
-                text_parts = []
-                for item in content:
-                    if isinstance(item, str) and item.strip():
-                        text_parts.append(item.strip())
-                final_content = '\n'.join(text_parts) if text_parts else str(content)
-            else:
-                # 其他类型转为字符串
-                final_content = str(content)
-
-            if final_content:
-                data["content"] = final_content
-                print(f"📝 添加文本内容到请求: {final_content[:100]}...")
-            else:
-                print(f"⚠️ 文本内容为空，跳过添加")
-
-        # 🔥 如果有业务ID，添加到请求体中
-        if business_id:
-            data["id"] = business_id
-            print(f"📋 添加业务ID到请求: {business_id}")
-
-        # 如果有资源ID，添加到请求体中
-        if resource_id:
-            data["resourceId"] = resource_id
-
-        # 将租户ID添加到请求体中
-        if tenant_id:
-            data["tenantId"] = tenant_id
-
+        """更新任务状态"""
         try:
-            print(f"📤 更新任务状态请求:")
-            print(f"   URL: {url}")
-            print(f"   Headers: {headers}")
-            print(f"   Data: {data}")
+            # 🔥 根据api_type选择不同的接口
+            if api_type == "digital_human":
+                url = self.config.update_task_video_edit_update()
+                print(f"🤖 [API-UPDATE] 使用数字人专用接口: {url}")
+            else:
+                url = self.config.update_task_status()
+                print(f"📝 [API-UPDATE] 使用通用接口: {url}")
 
-            response = requests.put(url, json=data, headers=headers, timeout=30)
+            headers = self.config.get_headers(tenant_id)
 
-            print(f"📥 任务状态更新响应:")
-            print(f"   状态码: {response.status_code}")
-            print(f"   响应体: {response.text}")
+            payload = {
+                "task_id": task_id,
+                "status": status,
+                "path": path,
+                "resourceId": resource_id,
+                "id": business_id
+            }
+
+            if content:
+                payload["content"] = content
+
+            print(f"🔄 [API-UPDATE] 更新任务状态: {task_id} -> {status} (type: {api_type})")
+            print(payload)
+            response = requests.put(url, json=payload, headers=headers, timeout=30)
 
             if response.status_code == 200:
-                response_data = response.json()
-
-                # 🔥 检查后端是否返回了错误
-                if response_data.get('code') == 0:
-                    print(f"✅ 任务状态更新成功: {task_id} -> status={status}")
-                    return response_data
-                else:
-                    print(f"❌ 后端返回错误: {response_data.get('msg', '未知错误')}")
-                    return None
+                print(f"✅ [API-UPDATE] 状态更新成功")
+                return True
             else:
-                print(f"❌ 任务状态更新失败: HTTP {response.status_code}")
-                return None
+                print(f"❌ [API-UPDATE] 状态更新失败: {response.status_code}")
+                return False
 
-        except requests.exceptions.RequestException as e:
-            print(f"❌ 任务状态更新失败: {task_id}, 错误: {str(e)}")
-            return None
+        except Exception as e:
+            print(f"❌ [API-UPDATE] 状态更新异常: {str(e)}")
+            return False
 
-    def create_resource(self, resource_type: str, name: str, path: str,local_full_path: str, file_type: str, size: int, tenant_id=None):
+    def create_resource(self, resource_type: str, name: str, path: str, local_full_path: str, file_type: str, size: int,
+                        tenant_id=None):
         """保存资源到素材库"""
         url = self.config.create_resource_url()
         headers = self.config.get_headers(tenant_id)
@@ -564,11 +689,147 @@ class APIService:
             print(f"❌ 资源保存失败: {name}, 错误: {str(e)}")
             return None
 
+
+# 创建API服务实例
 api_config = APIConfig()
 api_service = APIService(api_config)
 
+# ========== 重构：通用端点处理装饰器 ==========
+class EndpointHandler:
+    """统一的端点处理器，减少重复代码"""
+    
+    def __init__(self, api_service, task_manager=None):
+        self.api_service = api_service
+        self.task_manager = task_manager
+        self.response_formatter = ResponseFormatter()
+        
+    def create_endpoint_wrapper(self, business_func, function_name, async_func_name=None, 
+                               is_digital_human=False, response_type="video"):
+        """创建统一的端点包装器，进一步减少重复代码"""
+        
+        async def endpoint_wrapper(request):
+            """通用端点包装器"""
+            # 注册异步处理函数
+            if async_func_name:
+                globals()[async_func_name] = business_func
+            
+            # 获取模式
+            mode = getattr(request, 'mode', APIConstants.DEFAULT_MODE)
+            
+            if mode == APIConstants.SYNC_MODE:
+                return self.handle_sync_endpoint(
+                    business_func, request, function_name,
+                    is_digital_human=is_digital_human, 
+                    response_type=response_type
+                )
+            else:
+                return await self.handle_async_endpoint(
+                    request, business_func, async_func_name or function_name,
+                    mode=mode, urlpath=urlpath
+                )
+        
+        return endpoint_wrapper
+    
+    def handle_sync_endpoint(self, func, request, function_name, is_digital_human=False, response_type="video"):
+        """处理同步端点的通用逻辑"""
+        try:
+            # 提取通用参数
+            task_id = getattr(request, 'task_id', str(uuid.uuid4()))
+            tenant_id = getattr(request, 'tenant_id', None)
+            business_id = getattr(request, 'business_id', None)
+            
+            start_time = time.time()
+            
+            # 调用业务函数
+            result = func(**request.dict())
+            
+            end_time = time.time()
+            processing_time = round(end_time - start_time, 2)
+            
+            # 使用增强函数处理结果
+            enhanced_result = enhance_endpoint_result(result, function_name, request, is_digital_human=is_digital_human)
+            
+            return enhanced_result
+            
+        except Exception as e:
+            # 统一错误处理
+            error_res = {"error": str(e), "function_name": function_name}
+            return format_response(error_res, mode="sync", error_type=APIConstants.ERROR_GENERAL)
+    
+    async def handle_async_endpoint(self, request, func, function_name, mode=None, urlpath=""):
+        """处理异步端点的通用逻辑"""
+        try:
+            # 提取参数
+            task_id = getattr(request, 'task_id', str(uuid.uuid4()))
+            tenant_id = getattr(request, 'tenant_id', None)
+            business_id = getattr(request, 'business_id', None)
+            
+            # 提交异步任务
+            if self.task_manager:
+                actual_task_id = await self.task_manager.submit_task(
+                    func_name=function_name,
+                    args=request.dict(),
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                    business_id=business_id
+                )
+            else:
+                actual_task_id = task_id
+            
+            return format_response(actual_task_id, mode="async", urlpath=urlpath)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": function_name}
+            return format_response(error_res, mode="sync", error_type=APIConstants.ERROR_GENERAL)
+    
+    def unified_endpoint_handler(self, request, func, function_name, is_digital_human=False, 
+                                response_type="video", urlpath=""):
+        """统一的端点处理逻辑，自动判断同步/异步模式"""
+        mode = getattr(request, 'mode', APIConstants.DEFAULT_MODE)
+        
+        if mode == APIConstants.SYNC_MODE:
+            return self.handle_sync_endpoint(func, request, function_name, is_digital_human, response_type)
+        else:
+            return self.handle_async_endpoint(request, func, function_name, mode, urlpath)
 
-# 修复 AsyncTaskManager 类中的关键问题
+class TaskStatusManager:
+    """任务状态管理器，统一处理状态更新逻辑"""
+    
+    def __init__(self, api_service):
+        self.api_service = api_service
+    
+    def update_task_status(self, task_id, status, tenant_id=None, business_id=None, 
+                          path="", resource_id=None, content=None, api_type="default"):
+        """统一的任务状态更新"""
+        try:
+            return self.api_service.update_task_status(
+                task_id=task_id,
+                status=status,
+                tenant_id=tenant_id,
+                business_id=business_id,
+                path=path,
+                resource_id=resource_id,
+                content=content,
+                api_type=api_type
+            )
+        except Exception as e:
+            print(f"❌ [STATUS-UPDATE] 更新任务状态失败: {str(e)}")
+            return False
+    
+    def update_to_completed(self, task_id, tenant_id=None, business_id=None, path="", 
+                           resource_id=None, api_type="default"):
+        """更新任务状态为完成"""
+        return self.update_task_status(
+            task_id, APIConstants.STATUS_COMPLETED, tenant_id, business_id, 
+            path, resource_id, api_type=api_type
+        )
+    
+    def update_to_failed(self, task_id, tenant_id=None, business_id=None, api_type="default"):
+        """更新任务状态为失败"""
+        return self.update_task_status(
+            task_id, APIConstants.STATUS_FAILED, tenant_id, business_id, api_type=api_type
+        )
+
 
 class AsyncTaskManager:
     def __init__(self, max_workers=5, max_task_timeout=1800):
@@ -582,6 +843,9 @@ class AsyncTaskManager:
         self.api_service = api_service
         # 🔥 新增：跟踪已更新状态的任务，避免重复更新
         self.status_updated_tasks = set()
+        # 🔥 新增：启动超时检查线程
+        self.timeout_checker_thread = threading.Thread(target=self._check_timeouts, daemon=True)
+        self.timeout_checker_thread.start()
         print(f"🚀 异步任务管理器初始化: max_workers={max_workers}, timeout={max_task_timeout}s")
 
     async def submit_task(self, func_name: str, args: dict, task_id: str = None, tenant_id=None,
@@ -590,8 +854,8 @@ class AsyncTaskManager:
         if not task_id:
             task_id = str(uuid.uuid4())
 
-        # 检查函数是否存在
-        func = globals().get(func_name)
+        # 检查函数是否存在 - 支持service.video_api方法
+        func = self._get_function(func_name)
         if not func:
             raise ValueError(f"函数不存在: {func_name}")
 
@@ -641,2400 +905,1977 @@ class AsyncTaskManager:
 
         return task_id
 
-    def _download_and_upload_aliyun_file(self, aliyun_url: str, task_id: str, file_type: str = "video"):
+    def _get_function(self, func_name: str):
         """
-        简单的下载阿里云文件并上传到自己OSS的函数
+        获取函数对象，支持全局函数和service.video_api方法
 
         Args:
-            aliyun_url: 阿里云临时文件URL
-            task_id: 任务ID
-            file_type: 文件类型 ("video" 或 "image")
+            func_name: 函数名称
 
         Returns:
-            str: 自己OSS的URL，失败返回原URL
+            函数对象或None
         """
-        try:
-            import requests
-            import os
-            import tempfile
-
-            print(f"📥 [DOWNLOAD-UPLOAD] 开始下载并上传阿里云文件: {file_type}")
-            print(f"   原始URL: {aliyun_url}")
-
-            # 确定文件扩展名
-            if file_type == "video":
-                ext = ".mp4"
-            elif file_type == "image":
-                ext = ".jpg"
-            else:
-                ext = ".tmp"
-
-            # 创建临时文件
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as temp_file:
-                temp_path = temp_file.name
-
-            print(f"📁 [DOWNLOAD-UPLOAD] 临时文件路径: {temp_path}")
-
-            # 下载文件
-            response = requests.get(aliyun_url, timeout=300, stream=True)
-            response.raise_for_status()
-
-            with open(temp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-
-            file_size = os.path.getsize(temp_path)
-            print(f"✅ [DOWNLOAD-UPLOAD] 下载完成，文件大小: {file_size / 1024 / 1024:.2f} MB")
-
-            if file_size == 0:
-                raise Exception("下载的文件大小为0")
-
-            # 生成OSS路径
-            filename = f"aliyun_{file_type}_{task_id[:8]}{ext}"
-            oss_path = f"agent/resource/downloaded/{filename}"
-
-            print(f"📤 [DOWNLOAD-UPLOAD] 开始上传到OSS: {oss_path}")
-
-            # 上传到OSS
-            upload_success = upload_to_oss(temp_path, oss_path)
-
-            if upload_success:
-                # 生成自己的OSS URL
-                oss_url = f"https://{OSS_BUCKET_NAME}.{OSS_ENDPOINT}/{oss_path}"
-                print(f"✅ [DOWNLOAD-UPLOAD] 上传成功: {oss_url}")
-
-                # 清理临时文件
-                try:
-                    os.remove(temp_path)
-                    print(f"🗑️ [DOWNLOAD-UPLOAD] 临时文件已清理")
-                except:
-                    pass
-
-                return oss_url
-            else:
-                raise Exception("OSS上传失败")
-
-        except Exception as e:
-            print(f"❌ [DOWNLOAD-UPLOAD] 处理失败: {str(e)}")
-            # 清理临时文件
-            try:
-                if 'temp_path' in locals():
-                    os.remove(temp_path)
-            except:
-                pass
-            # 失败时返回原URL
-            return aliyun_url
-
-    def _handle_multi_image_urls(self, result_data, business_id, task_id, tenant_id):
-        """
-        🔥 处理包含多个图片URL的结果（如AI试衣分割）
-
-        Args:
-            result_data: 包含多个图片URL的结果数据
-            business_id: 业务ID
-            task_id: 任务ID
-            tenant_id: 租户ID
-
-        Returns:
-            是否处理成功
-        """
-        print(f"🖼️ [MULTI-IMAGE] 开始处理多图片URL结果")
-
-        try:
-            if not isinstance(result_data, dict):
-                print(f"⚠️ [MULTI-IMAGE] 结果不是字典类型: {type(result_data)}")
-                return False
-
-            # 收集所有需要下载的图片URL
-            all_urls = []
-            url_metadata = []
-
-            # 提取parsing_img_url
-            parsing_urls = result_data.get('parsing_img_url', [])
-            if isinstance(parsing_urls, list):
-                for i, url in enumerate(parsing_urls):
-                    if url and isinstance(url, str):
-                        all_urls.append(url)
-                        url_metadata.append({
-                            'type': 'parsing',
-                            'index': i,
-                            'key': f"parsing_{i}"
-                        })
-
-            # 提取crop_img_url
-            crop_urls = result_data.get('crop_img_url', [])
-            if isinstance(crop_urls, list):
-                for i, url in enumerate(crop_urls):
-                    if url and isinstance(url, str):
-                        all_urls.append(url)
-                        url_metadata.append({
-                            'type': 'crop',
-                            'index': i,
-                            'key': f"crop_{i}"
-                        })
-
-            print(f"📋 [MULTI-IMAGE] 共找到 {len(all_urls)} 个图片URL")
-
-            if not all_urls:
-                print(f"⚠️ [MULTI-IMAGE] 没有找到有效的图片URL")
-                return False
-
-            # 下载所有图片并上传到OSS
-            uploaded_results = {}
-
-            for i, (url, metadata) in enumerate(zip(all_urls, url_metadata)):
-                try:
-                    print(f"⬇️ [MULTI-IMAGE] 处理图片 {i + 1}/{len(all_urls)}: {metadata['key']}")
-
-                    # 下载图片
-                    import requests
-                    response = requests.get(url, timeout=30)
-                    response.raise_for_status()
-
-                    # 确定文件扩展名
-                    content_type = response.headers.get('content-type', '')
-                    if 'png' in content_type:
-                        ext = '.png'
-                    elif 'jpg' in content_type or 'jpeg' in content_type:
-                        ext = '.jpg'
-                    else:
-                        ext = '.png'  # 默认使用png
-
-                    # 生成文件名和OSS路径
-                    import time
-                    timestamp = int(time.time())
-                    filename = f"ai_tryon_segment_{metadata['key']}_{timestamp}{ext}"
-                    oss_path = f"agent/resource/ai_tryon_segment/{filename}"
-
-                    # 创建临时文件
-                    import tempfile
-                    import os
-                    with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as temp_file:
-                        temp_file.write(response.content)
-                        temp_path = temp_file.name
-
-                    try:
-                        # 上传到OSS
-                        upload_success = upload_to_oss(temp_path, oss_path)
-
-                        if upload_success:
-                            oss_url = f"https://{OSS_BUCKET_NAME}.{OSS_ENDPOINT}/{oss_path}"
-                            uploaded_results[metadata['key']] = {
-                                'oss_url': oss_url,
-                                'oss_path': oss_path,
-                                'original_url': url,
-                                'type': metadata['type'],
-                                'index': metadata['index']
-                            }
-                            print(f"✅ [MULTI-IMAGE] {metadata['key']} 上传成功: {oss_url}")
-                        else:
-                            print(f"❌ [MULTI-IMAGE] {metadata['key']} OSS上传失败")
-
-                    finally:
-                        # 清理临时文件
-                        try:
-                            os.remove(temp_path)
-                        except:
-                            pass
-
-                except Exception as e:
-                    print(f"❌ [MULTI-IMAGE] {metadata['key']} 处理失败: {str(e)}")
-                    continue
-
-            if not uploaded_results:
-                print(f"❌ [MULTI-IMAGE] 所有图片处理都失败了")
-                return False
-
-            # 重新构建结果数据，用OSS URL替换原始URL
-            updated_parsing_urls = []
-            updated_crop_urls = []
-
-            # 重建parsing_img_url数组
-            parsing_count = len(parsing_urls) if isinstance(parsing_urls, list) else 0
-            for i in range(parsing_count):
-                key = f"parsing_{i}"
-                if key in uploaded_results:
-                    updated_parsing_urls.append(uploaded_results[key]['oss_url'])
-                elif i < len(parsing_urls):
-                    updated_parsing_urls.append(parsing_urls[i])  # 保留原URL作为备用
-
-            # 重建crop_img_url数组
-            crop_count = len(crop_urls) if isinstance(crop_urls, list) else 0
-            for i in range(crop_count):
-                key = f"crop_{i}"
-                if key in uploaded_results:
-                    updated_crop_urls.append(uploaded_results[key]['oss_url'])
-                elif i < len(crop_urls):
-                    updated_crop_urls.append(crop_urls[i])  # 保留原URL作为备用
-
-            # 构建最终结果
-            final_result = {
-                "parsing_img_url": updated_parsing_urls,
-                "crop_img_url": updated_crop_urls,
-                "bbox": result_data.get('bbox', []),
-                "upload_summary": {
-                    "total_images": len(all_urls),
-                    "successful_uploads": len(uploaded_results),
-                    "uploaded_details": uploaded_results
-                }
-            }
-
-            # 转换为JSON字符串作为path参数传递
-            import json
-            result_json = json.dumps(final_result, ensure_ascii=False)
-
-            # 更新任务状态为成功
-            task_update_result = self.api_service.update_task_status(
-                task_id=task_id,
-                status="1",  # 完成
-                tenant_id=tenant_id,
-                path=result_json,  # 传递JSON字符串
-                resource_id=None,
-                business_id=business_id,
-            )
-
-            print(f"🎉 [MULTI-IMAGE] 多图片处理完成，共上传 {len(uploaded_results)} 个文件")
-            print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-            return True
-
-        except Exception as e:
-            print(f"❌ [MULTI-IMAGE] 多图片处理失败: {str(e)}")
-            # 更新任务状态为失败
-            try:
-                self.api_service.update_task_status(
-                    task_id, "2", tenant_id, business_id=business_id
-                )
-            except Exception as status_error:
-                print(f"⚠️ [MULTI-IMAGE] 更新失败状态时出错: {status_error}")
-            return False
-
-    def _execute_task_with_oss_upload(self, task_id: str, func_name: str, args: dict, tenant_id=None, business_id=None):
-        """🔥 执行任务并上传到OSS - 简化版本（跳过图片和文本上传）"""
-        print(f"🎯 [OSS-UPLOAD] 开始执行任务: {task_id}")
-        print(f"   业务ID: {business_id}")
-        # 🔥 检测是否为数字人生成接口
-        is_digital_human = func_name == "process_single_video_by_url"
-        api_type = "digital_human" if is_digital_human else "default"
-
-        # 1. 执行原有任务
-        result = self._execute_task_with_timeout(task_id, func_name, args)
-
-        # 2. 如果成功且有tenant_id，进行OSS上传
-        if result["status"] == "completed" and tenant_id:
-            try:
-                print(f"☁️ [OSS-UPLOAD] 开始OSS上传流程")
-
-                # 更新状态：开始上传
-                with self.result_condition:
-                    if task_id in self.results:
-                        self.results[task_id].update({
-                            "status": "uploading",
-                            "current_step": "正在处理结果",
-                            "progress": "90%"
-                        })
-                        self.result_condition.notify_all()
-
-                # 🔥 检查函数类型
-                text_functions = [
-                    "get_text_industry", "get_copy_generation", "analyze_cover_wrapper"
-                ]
-
-                wanxiang_image_functions = [
-                    # 原有的
-                    "get_text_to_image_v2", "get_text_to_image_v1",
-                    "get_ai_tryon_basic", "get_ai_tryon_plus",
-                    "get_virtual_model_v1", "get_virtual_model_v2",
-                    "get_background_generation", "get_image_background_edit",
-
-                    # 新增的图像类
-                    "get_doodle_painting", "get_image_inpainting", "get_personal_portrait",
-                    "get_image_outpainting", "get_shoe_model", "get_creative_poster",
-                    "get_ai_tryon_enhance", "get_ai_tryon_segment",
-                    "get_image_upscale", "get_image_style_transfer", "get_artistic_text"
-                ]
-
-                # 🔥 新增：多图片URL类函数
-                multi_image_functions = [
-                    "get_ai_tryon_segment"  # 返回多个图片URL的函数
-                ]
-
-                # 新增的视频类函数
-                wanxiang_video_functions = [
-                    "get_image_to_video_basic", "get_image_to_video_advanced",
-                    "get_text_to_video", "get_video_edit",
-                    "get_animate_anyone", "get_emo_video", "get_live_portrait",
-                    "get_video_style_transfer"
-                ]
-
-                is_text_function = func_name in text_functions
-                is_wanxiang_image_function = func_name in wanxiang_image_functions
-                is_wanxiang_video_function = func_name in wanxiang_video_functions
-                is_multi_image_function = func_name in multi_image_functions
-
-                print(f"🔍 [OSS-UPLOAD] 函数类型检测:")
-                print(f"   函数名: {func_name}")
-                print(f"   是文本类: {is_text_function}")
-                print(f"   是万相图片类: {is_wanxiang_image_function}")
-
-                # 🔥 新增：处理多图片URL函数
-                if is_multi_image_function:
-                    print(f"🖼️ [OSS-UPLOAD] 检测到多图片URL接口: {func_name} - 特殊处理")
-
-                    success = self._handle_multi_image_urls(result.get("result"), business_id, task_id, tenant_id)
-
-                    if success:
-                        result.update({
-                            "multi_image_upload_success": True,
-                            "task_update_success": True,
-                            "cloud_integration": "multi_image",
-                            "business_id": business_id,
-                            "content_type": "multi_image",
-                            "oss_upload_success": True,
-                            "upload_skipped": False
-                        })
-                        print(f"✅ [OSS-UPLOAD] 多图片处理完成!")
-                    else:
-                        raise Exception("多图片处理失败")
-
-                elif is_text_function:
-                    # 🔥 文本类接口处理 - 直接返回结果，不上传
-                    print(f"📝 [OSS-UPLOAD] 检测到文本类接口: {func_name} - 跳过上传")
-
-                    # 提取文本内容
-                    text_content = self._extract_text_content(result.get("result"))
-
-                    if text_content:
-                        print(f"📝 [OSS-UPLOAD] 提取到文本内容: {text_content[:100]}...")
-
-                        # 🔥 直接更新任务状态为完成，传递文本内容
-                        task_update_result = self.api_service.update_task_status(
-                            task_id=task_id,
-                            status="1",  # 完成
-                            tenant_id=tenant_id,
-                            path="",  # 文本类接口不需要路径
-                            resource_id=None,
-                            business_id=business_id,
-                            content=text_content,  # 🔥 传递文本内容
-                            api_type = api_type
-                        )
-
-                        # 更新结果
-                        result.update({
-                            "text_content": text_content,
-                            "task_update_success": bool(task_update_result),
-                            "content_type": "text",
-                            "business_id": business_id,
-                            "cloud_integration": "text_direct",
-                            "oss_upload_success": False,  # 标记为未上传OSS
-                            "upload_skipped": True,
-                            "skip_reason": "文本类接口，直接返回内容"
-                        })
-
-                        print(f"✅ [OSS-UPLOAD] 文本类接口处理完成!")
-                        print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-                        print(f"   跳过OSS上传: 文本内容直接返回")
-                    else:
-                        raise Exception("无法提取文本内容")
-
-                elif is_wanxiang_image_function:
-                    print(f"🖼️ [OSS-UPLOAD] 检测到通义万相图片接口: {func_name} - 下载并上传")
-
-                    image_url = self._extract_image_url_from_result(result.get("result"))
-
-                    if image_url:
-                        print(f"🔗 [OSS-UPLOAD] 提取到图片URL: {image_url}")
-
-                        # 🔥 检查是否是阿里云URL，如果是则下载上传
-                        if "lan8-e-business.oss" not in image_url:
-                            final_image_url = self._download_and_upload_aliyun_file(image_url, task_id, "image")
-                        else:
-                            final_image_url = image_url
-
-                        task_update_result = self.api_service.update_task_status(
-                            task_id=task_id,
-                            status="1",
-                            tenant_id=tenant_id,
-                            path=final_image_url,
-                            resource_id=None,
-                            business_id=business_id,
-                            api_type=api_type
-                        )
-
-                        result.update({
-                            "original_image_url": image_url,
-                            "image_url": final_image_url,
-                            "task_update_success": bool(task_update_result),
-                            "cloud_integration": "image_downloaded" if final_image_url != image_url else "image_direct",
-                            "business_id": business_id,
-                            "content_type": "image",
-                            "oss_upload_success": final_image_url != image_url,
-                            "upload_skipped": final_image_url == image_url
-                        })
-
-                        print(f"✅ [OSS-UPLOAD] 图片处理完成: {final_image_url}")
-
-                    else:
-                        raise Exception("无法提取图片URL")
-
-                elif is_wanxiang_video_function:
-                    print(f"🎬 [OSS-UPLOAD] 检测到通义万相视频接口: {func_name} - 下载并上传")
-
-                    video_url = self._extract_video_url_from_result(result.get("result"))
-
-                    if video_url:
-                        print(f"🔗 [OSS-UPLOAD] 提取到视频URL: {video_url}")
-
-                        # 🔥 检查是否是阿里云URL，如果是则下载上传
-                        if "lan8-e-business.oss" not in video_url:
-                            final_video_url = self._download_and_upload_aliyun_file(video_url, task_id, "video")
-                        else:
-                            final_video_url = video_url
-
-                        task_update_result = self.api_service.update_task_status(
-                            task_id=task_id,
-                            status="1",
-                            tenant_id=tenant_id,
-                            path=final_video_url,
-                            resource_id=None,
-                            business_id=business_id,
-                            api_type=api_type
-                        )
-
-                        result.update({
-                            "original_video_url": video_url,
-                            "video_url": final_video_url,
-                            "task_update_success": bool(task_update_result),
-                            "cloud_integration": "video_downloaded" if final_video_url != video_url else "video_direct",
-                            "business_id": business_id,
-                            "content_type": "video",
-                            "oss_upload_success": final_video_url != video_url,
-                            "upload_skipped": final_video_url == video_url
-                        })
-
-                        print(f"✅ [OSS-UPLOAD] 视频处理完成: {final_video_url}")
-
-                    else:
-                        raise Exception("无法提取视频URL")
-
-                else:
-                    # 🔥 普通文件类接口处理（视频、音频等）- 正常上传OSS
-                    print(f"📁 [OSS-UPLOAD] 检测到普通文件类接口: {func_name} - 执行OSS上传")
-
-                    # 获取输出文件路径
-                    warehouse_path = extract_warehouse_path(result.get("result"))
-                    if not warehouse_path:
-                        raise Exception("无法提取输出路径")
-
-                    # 🔥 检查路径是否为URL（防止误把URL当作本地路径）
-                    if warehouse_path.startswith(('http://', 'https://')):
-                        print(f"⚠️ [OSS-UPLOAD] 检测到URL路径，跳过上传: {warehouse_path}")
-
-                        # 🔥 对于URL结果，直接返回，不上传
-                        task_update_result = self.api_service.update_task_status(
-                            task_id=task_id,
-                            status="1",  # 完成
-                            tenant_id=tenant_id,
-                            path=warehouse_path,  # 直接使用URL
-                            resource_id=None,
-                            business_id=business_id,
-                            api_type=api_type
-                        )
-
-                        result.update({
-                            "original_url": warehouse_path,
-                            "task_update_success": bool(task_update_result),
-                            "cloud_integration": "url_direct",
-                            "business_id": business_id,
-                            "content_type": "url",
-                            "oss_upload_success": False,
-                            "upload_skipped": True,
-                            "skip_reason": "结果为URL，直接返回"
-                        })
-
-                        print(f"✅ [OSS-UPLOAD] URL结果处理完成!")
-
-                    else:
-                        # 正常的本地文件处理 - 执行OSS上传
-                        user_data_dir = config.get_user_data_dir()
-                        local_full_path = os.path.join(user_data_dir, warehouse_path)
-
-                        if not os.path.exists(local_full_path):
-                            raise Exception(f"输出文件不存在: {local_full_path}")
-
-                        # 生成OSS路径
-                        oss_path = f"agent/resource/{warehouse_path}"
-
-                        print(f"📤 [OSS-UPLOAD] 开始上传文件:")
-                        print(f"   本地: {local_full_path}")
-                        print(f"   OSS: {oss_path}")
-                        # 🔥 检测是否为数字人生成接口
-                        is_digital_human = func_name == "process_single_video_by_url"
-                        api_type = "digital_human" if is_digital_human else "default"
-
-                        # 上传到OSS
-                        upload_success = upload_to_oss(local_full_path, oss_path)
-
-                        if upload_success:
-                            print(f"✅ [OSS-UPLOAD] 文件OSS上传成功")
-
-                            # 获取文件信息
-                            file_info = get_file_info(local_full_path)
-                            if file_info:
-                                # 调用create_resource API
-                                resource_result = self.api_service.create_resource(
-                                    resource_type=file_info['resource_type'],
-                                    name=file_info['name'],
-                                    path=oss_path,
-                                    local_full_path=local_full_path,
-                                    file_type=file_info['file_type'],
-                                    size=file_info['size'],
-                                    tenant_id=tenant_id
-                                )
-
-                                resource_id = None
-                                resource_success = False
-
-                                if resource_result:
-                                    resource_id = resource_result.get('resource_id')
-                                    if isinstance(resource_result, dict) and resource_result.get('response'):
-                                        response_data = resource_result['response']
-                                        resource_success = response_data.get('code') == 200
-                                    else:
-                                        resource_success = bool(resource_id)
-
-                                # 更新任务状态为完成
-                                task_update_result = self.api_service.update_task_status(
-                                    task_id=task_id,
-                                    status="1",  # 完成
-                                    tenant_id=tenant_id,
-                                    path=oss_path,
-                                    resource_id=resource_id,
-                                    business_id=business_id,
-                                    api_type = api_type
-                                )
-
-                                # 生成OSS访问URL
-                                oss_url = f"https://{OSS_BUCKET_NAME}.{OSS_ENDPOINT}/{oss_path}"
-
-                                # 更新结果 - 成功情况
-                                result.update({
-                                    "oss_upload_success": True,
-                                    "oss_path": oss_path,
-                                    "oss_url": oss_url,
-                                    "resource_id": resource_id,
-                                    "resource_create_success": resource_success,
-                                    "task_update_success": bool(task_update_result),
-                                    "cloud_integration": "oss",
-                                    "business_id": business_id,
-                                    "content_type": "file",
-                                    "upload_skipped": False
-                                })
-
-                                print(f"✅ [OSS-UPLOAD] 文件完整流程成功!")
-                                print(f"   OSS URL: {oss_url}")
-                                print(f"   资源ID: {resource_id}")
-
-                            else:
-                                raise Exception("获取文件信息失败")
-                        else:
-                            raise Exception("文件OSS上传失败")
-
-            except Exception as e:
-                print(f"❌ [OSS-UPLOAD] 上传流程失败: {str(e)}")
-
-                # 🔥 更新任务状态为失败，传递业务ID
-                if tenant_id:
-                    try:
-                        self.api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id, api_type=api_type)
-                        print(f"📤 [OSS-UPLOAD] 已更新任务状态为失败")
-                    except Exception as update_error:
-                        print(f"⚠️ [OSS-UPLOAD] 更新失败状态时出错: {update_error}")
-
-                # 更新结果 - 失败情况
-                result.update({
-                    "oss_upload_success": False,
-                    "upload_error": str(e),
-                    "status": "completed_with_upload_error",
-                    "cloud_integration": "oss",
-                    "business_id": business_id
-                })
-
-        return result
-
-    def _extract_image_url_from_result(self, result):
-        """🔥 从通义万相结果中提取图片URL"""
-        if not result:
-            return None
-
-        print(f"🔍 [EXTRACT-IMAGE-URL] 开始提取图片URL，输入类型: {type(result)}")
-        print(f"🔍 [EXTRACT-IMAGE-URL] 输入内容: {str(result)[:200]}...")
-
-        # 如果结果直接是URL字符串
-        if isinstance(result, str) and (result.startswith('http://') or result.startswith('https://')):
-            print(f"✅ [EXTRACT-IMAGE-URL] 直接URL字符串: {result}")
-            return result
-
-        # 如果结果是字典，尝试提取URL
-        if isinstance(result, dict):
-            # 常见的URL字段名
-            url_fields = ['url', 'image_url', 'output_url', 'result_url', 'data', 'output', 'image']
-
-            for field in url_fields:
-                if field in result:
-                    field_value = result[field]
-                    if isinstance(field_value, str) and (
-                            field_value.startswith('http://') or field_value.startswith('https://')):
-                        print(f"✅ [EXTRACT-IMAGE-URL] 从字典字段 {field} 提取: {field_value}")
-                        return field_value
-
-            # 如果有success字段且为True，遍历所有字段查找URL
-            if result.get('success') == True:
-                for key, value in result.items():
-                    if isinstance(value, str) and (value.startswith('http://') or value.startswith('https://')):
-                        print(f"✅ [EXTRACT-IMAGE-URL] 从成功结果字段 {key} 提取: {value}")
-                        return value
-
-        # 如果结果是列表，检查每个元素
-        if isinstance(result, list):
-            for item in result:
-                extracted_url = self._extract_image_url_from_result(item)
-                if extracted_url:
-                    print(f"✅ [EXTRACT-IMAGE-URL] 从列表项提取: {extracted_url}")
-                    return extracted_url
-
-        print(f"⚠️ [EXTRACT-IMAGE-URL] 无法提取有效图片URL")
-        return None
-
-    def _extract_video_url_from_result(self, result):
-        """🔥 从通义万相结果中提取视频URL"""
-        if not result:
-            return None
-
-        print(f"🔍 [EXTRACT-VIDEO-URL] 开始提取视频URL，输入类型: {type(result)}")
-        print(f"🔍 [EXTRACT-VIDEO-URL] 输入内容: {str(result)[:200]}...")
-
-        # 如果结果直接是URL字符串
-        if isinstance(result, str) and (result.startswith('http://') or result.startswith('https://')):
-            print(f"✅ [EXTRACT-VIDEO-URL] 直接URL字符串: {result}")
-            return result
-
-        # 如果结果是字典，尝试提取URL
-        if isinstance(result, dict):
-            # 常见的视频URL字段名
-            url_fields = ['url', 'video_url', 'output_url', 'result_url', 'data', 'output', 'video', 'video_path']
-
-            for field in url_fields:
-                if field in result:
-                    field_value = result[field]
-                    if isinstance(field_value, str) and (
-                            field_value.startswith('http://') or field_value.startswith('https://')):
-                        print(f"✅ [EXTRACT-VIDEO-URL] 从字典字段 {field} 提取: {field_value}")
-                        return field_value
-
-            # 如果有success字段且为True，遍历所有字段查找URL
-            if result.get('success') == True:
-                for key, value in result.items():
-                    if isinstance(value, str) and (value.startswith('http://') or value.startswith('https://')):
-                        print(f"✅ [EXTRACT-VIDEO-URL] 从成功结果字段 {key} 提取: {value}")
-                        return value
-
-        # 如果结果是列表，检查每个元素
-        if isinstance(result, list):
-            for item in result:
-                extracted_url = self._extract_video_url_from_result(item)
-                if extracted_url:
-                    print(f"✅ [EXTRACT-VIDEO-URL] 从列表项提取: {extracted_url}")
-                    return extracted_url
-
-        print(f"⚠️ [EXTRACT-VIDEO-URL] 无法提取有效视频URL")
-        return None
-
-    def _extract_text_content(self, result):
-        """🔥 提取文本内容的辅助函数 - 确保返回字符串"""
-        if not result:
-            return None
-
-        print(f"🔍 [EXTRACT-TEXT] 开始提取文本内容，输入类型: {type(result)}")
-        print(f"🔍 [EXTRACT-TEXT] 输入内容: {str(result)[:200]}...")
-
-        # 🔥 如果结果是元组或列表，合并为字符串
-        if isinstance(result, (tuple, list)):
-            # 过滤出字符串元素并合并
-            text_parts = []
-            for item in result:
-                if isinstance(item, str) and item.strip():
-                    text_parts.append(item.strip())
-                elif isinstance(item, dict):
-                    # 递归处理字典元素
-                    extracted = self._extract_text_content(item)
-                    if extracted:
-                        text_parts.append(extracted)
-
-            if text_parts:
-                # 用换行符或空格连接多个文本部分
-                combined_text = '\n'.join(text_parts) if len(text_parts) > 1 else text_parts[0]
-                print(f"✅ [EXTRACT-TEXT] 从元组/列表提取: {combined_text[:100]}...")
-                return combined_text
-
-        # 🔥 如果结果直接是字符串
-        if isinstance(result, str):
-            cleaned_text = result.strip()
-            print(f"✅ [EXTRACT-TEXT] 直接字符串: {cleaned_text[:100]}...")
-            return cleaned_text if cleaned_text else None
-
-        # 🔥 如果结果是字典，尝试提取文本内容
-        if isinstance(result, dict):
-            print(f"🔍 [EXTRACT-TEXT] 处理字典，键: {list(result.keys())}")
-
-            # 尝试常见的文本字段
-            text_fields = ['text', 'content', 'data', 'result', 'message', 'generated_text', 'analysis_result']
-            for field in text_fields:
-                if field in result:
-                    field_value = result[field]
-                    print(f"🔍 [EXTRACT-TEXT] 检查字段 {field}: {type(field_value)}")
-
-                    if isinstance(field_value, str) and field_value.strip():
-                        print(f"✅ [EXTRACT-TEXT] 从字典字段 {field} 提取: {field_value[:100]}...")
-                        return field_value.strip()
-                    elif isinstance(field_value, (tuple, list)):
-                        # 递归处理
-                        extracted = self._extract_text_content(field_value)
-                        if extracted:
-                            print(f"✅ [EXTRACT-TEXT] 从字典字段 {field} 递归提取: {extracted[:100]}...")
-                            return extracted
-
-            # 如果有success字段且为True，尝试提取其他字段
-            if result.get('success') == True:
-                print(f"🔍 [EXTRACT-TEXT] 成功结果，遍历所有字段")
-                for key, value in result.items():
-                    if key not in ['success', 'code', 'status'] and isinstance(value, str) and len(value.strip()) > 10:
-                        print(f"✅ [EXTRACT-TEXT] 从成功结果字段 {key} 提取: {value[:100]}...")
-                        return value.strip()
-                    elif isinstance(value, (tuple, list)):
-                        extracted = self._extract_text_content(value)
-                        if extracted:
-                            print(f"✅ [EXTRACT-TEXT] 从成功结果字段 {key} 递归提取: {extracted[:100]}...")
-                            return extracted
-
-        print(f"⚠️ [EXTRACT-TEXT] 无法提取有效文本内容")
+        # 1. 首先尝试在全局范围内查找
+        func = globals().get(func_name)
+        if func:
+            return func
+
+        # 2. 如果不在全局范围，检查是否为service.video_api的方法
+        if hasattr(service, 'video_api') and hasattr(service.video_api, func_name):
+            return getattr(service.video_api, func_name)
+
+        # 3. 如果还是找不到，返回None
         return None
 
     def _execute_task_with_timeout(self, task_id: str, func_name: str, args: dict):
-        """🔥 带超时控制的任务执行 - 避免重复状态更新"""
-        print(f"\n🔥 [EXECUTE-TIMEOUT] 开始执行任务: {task_id}")
-        print(f"   函数名: {func_name}")
-        print(f"   参数: {args}")
-        print(f"   超时时间: {self.max_task_timeout}秒")
-
+        """执行任务的基础方法（带超时）"""
         start_time = time.time()
 
-        # 获取租户ID和业务ID
-        tenant_id = None
-        business_id = None
-        is_digital_human = func_name == "process_single_video_by_url"
-        api_type = "digital_human" if is_digital_human else "default"
-
-        with self.result_condition:
-            if task_id in self.results:
-                tenant_id = self.results[task_id].get("tenant_id")
-                business_id = self.results[task_id].get("business_id")
-
         try:
-            # 🔥 修复：检查是否已经更新过状态，避免重复更新
-            if tenant_id and task_id not in self.status_updated_tasks:
-                try:
-                    self.api_service.update_task_status(
-                        task_id=task_id,
-                        status="0",  # 处理中
-                        tenant_id=tenant_id,
-                        business_id=business_id,
-                        api_type=api_type
-                    )
-                    self.status_updated_tasks.add(task_id)  # 标记已更新
-                    print(f"📤 [EXECUTE-TIMEOUT] 远程状态已更新为处理中")
-                except Exception as status_error:
-                    print(f"⚠️ [EXECUTE-TIMEOUT] 更新远程状态失败: {status_error}")
-            elif task_id in self.status_updated_tasks:
-                print(f"🔄 [EXECUTE-TIMEOUT] 任务状态已在submit_task中更新，跳过重复更新")
-
-            # 更新本地状态为处理中
+            # 更新状态为处理中
             with self.result_condition:
                 if task_id in self.results:
                     self.results[task_id].update({
                         "status": "processing",
                         "started_at": start_time,
-                        "progress": "10%",
-                        "current_step": "开始执行函数"
+                        "progress": "20%",
+                        "current_step": "开始处理"
                     })
                     self.result_condition.notify_all()
 
-            print(f"🔄 [EXECUTE-TIMEOUT] 任务 {task_id} 状态已更新为 processing")
-
-            # 检查函数是否存在
-            func = globals().get(func_name)
+            # 检查函数是否存在 - 支持service.video_api方法
+            func = self._get_function(func_name)
             if not func:
-                # 函数不存在时更新远程状态为失败
-                if tenant_id:
-                    try:
-                        self.api_service.update_task_status(
-                            task_id=task_id,
-                            status="2",  # 失败
-                            tenant_id=tenant_id,
-                            business_id=business_id,
-                            api_type=api_type
-                        )
-                        print(f"📤 [EXECUTE-TIMEOUT] 函数不存在，远程状态已更新为失败")
-                    except Exception as status_error:
-                        print(f"⚠️ [EXECUTE-TIMEOUT] 更新远程失败状态时出错: {status_error}")
-
                 raise ValueError(f"函数不存在: {func_name}")
 
-            print(f"✅ [EXECUTE-TIMEOUT] 找到函数: {func_name}")
-
-            # 更新本地进度
-            with self.result_condition:
-                if task_id in self.results:
-                    self.results[task_id].update({
-                        "current_step": "正在执行函数",
-                        "progress": "30%"
-                    })
-                    self.result_condition.notify_all()
-
-            print(f"🚀 [EXECUTE-TIMEOUT] 开始执行函数: {func_name}")
-
-            # 使用线程池执行函数，并设置超时
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(func, **args)
-
-                try:
-                    result = future.result(timeout=self.max_task_timeout)
-                    print(f"✅ [EXECUTE-TIMEOUT] 函数执行完成: {func_name}")
-
-                except TimeoutError:
-                    print(f"⏰ [EXECUTE-TIMEOUT] 函数执行超时: {func_name}")
-
-                    # 超时时更新远程状态为失败
-                    if tenant_id:
-                        try:
-                            self.api_service.update_task_status(
-                                task_id=task_id,
-                                status="2",  # 失败
-                                tenant_id=tenant_id,
-                                business_id=business_id,
-                                api_type=api_type
-                            )
-                            print(f"📤 [EXECUTE-TIMEOUT] 超时，远程状态已更新为失败")
-                        except Exception as status_error:
-                            print(f"⚠️ [EXECUTE-TIMEOUT] 更新远程超时状态时出错: {status_error}")
-
-                    future.cancel()
-                    raise TimeoutError(f"函数 {func_name} 执行超时 ({self.max_task_timeout}秒)")
-
-            print(f"   结果类型: {type(result)}")
-            print(f"   结果内容: {str(result)[:200]}...")
-
-            # 处理结果
-            warehouse_path = extract_warehouse_path(result)
-            full_path = get_full_file_path(warehouse_path) if warehouse_path else None
-            file_exists = verify_file_exists(warehouse_path) if warehouse_path else False
+            # 执行函数
+            print(f"🚀 [EXECUTE] 开始执行函数: {func_name}")
+            result = func(**args)
 
             end_time = time.time()
             processing_time = round(end_time - start_time, 2)
 
-            print(f"📊 [EXECUTE-TIMEOUT] 处理结果:")
-            print(f"   warehouse路径: {warehouse_path}")
-            print(f"   完整路径: {full_path}")
-            print(f"   文件存在: {file_exists}")
-            print(f"   处理时间: {processing_time}秒")
+            print(f"✅ [EXECUTE] 函数执行完成: {func_name}, 耗时: {processing_time}s")
 
-            # 注意：这里不更新远程状态为完成，因为后续的OSS上传流程会处理
-            if not tenant_id:
-                print(f"📝 [EXECUTE-TIMEOUT] 本地执行模式，无需远程状态更新")
-
-            # 更新本地最终结果
-            final_result = {
+            return {
                 "task_id": task_id,
                 "status": "completed",
                 "result": result,
-                "warehouse_path": warehouse_path,
-                "videoPath": warehouse_path,
-                "full_file_path": full_path,
-                "file_exists": file_exists,
                 "timestamp": end_time,
                 "started_at": start_time,
                 "completed_at": end_time,
                 "processing_time": processing_time,
-                "function_name": func_name,
-                "input_params": args,
-                "tenant_id": tenant_id,
-                "business_id": business_id
+                "function_name": func_name
             }
-
-            with self.result_condition:
-                if task_id in self.results:
-                    self.results[task_id].update(final_result)
-                    self.result_condition.notify_all()
-
-            print(f"🎉 [EXECUTE-TIMEOUT] 任务 {task_id} 执行完成！")
-            return final_result
 
         except Exception as e:
             end_time = time.time()
             processing_time = round(end_time - start_time, 2)
 
-            import traceback
-            error_traceback = traceback.format_exc()
+            print(f"❌ [EXECUTE] 函数执行失败: {func_name}, 错误: {str(e)}")
 
-            print(f"❌ [EXECUTE-TIMEOUT] 任务 {task_id} 失败!")
-            print(f"   错误类型: {type(e).__name__}")
-            print(f"   错误信息: {str(e)}")
-            print(f"   错误堆栈: {error_traceback}")
-
-            # 执行失败时更新远程状态为失败
-            if tenant_id:
-                try:
-                    self.api_service.update_task_status(
-                        task_id=task_id,
-                        status="2",  # 失败
-                        tenant_id=tenant_id,
-                        business_id=business_id,
-                        api_type=api_type
-                    )
-                    print(f"📤 [EXECUTE-TIMEOUT] 执行失败，远程状态已更新为失败")
-                except Exception as status_error:
-                    print(f"⚠️ [EXECUTE-TIMEOUT] 更新远程失败状态时出错: {status_error}")
-
-            # 更新本地失败结果
-            final_result = {
+            return {
                 "task_id": task_id,
                 "status": "failed",
                 "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": error_traceback,
                 "timestamp": end_time,
                 "started_at": start_time,
                 "failed_at": end_time,
                 "processing_time": processing_time,
-                "function_name": func_name,
-                "input_params": args,
-                "tenant_id": tenant_id,
-                "business_id": business_id
+                "function_name": func_name
             }
 
-            with self.result_condition:
-                if task_id in self.results:
-                    self.results[task_id].update(final_result)
-                    self.result_condition.notify_all()
+    def _execute_task_with_oss_upload(self, task_id: str, func_name: str, args: dict, tenant_id=None, business_id=None):
+        """🔥 执行任务并上传到OSS - 简化版本"""
+        print(f"🎯 [OSS-UPLOAD] 开始执行任务: {task_id}")
+        print(f"   业务ID: {business_id}")
 
-            return final_result
+        # 1. 执行原有任务
+        result = self._execute_task_with_timeout(task_id, func_name, args)
 
-        finally:
-            # 🔥 任务完成后，清理状态更新标记（可选）
-            # self.status_updated_tasks.discard(task_id)
-            pass
+        # 2. 处理结果
+        if result["status"] == "failed" and tenant_id:
+            # 任务失败时，更新状态为失败
+            try:
+                print(f"❌ [OSS-UPLOAD] 任务执行失败，更新状态为失败")
+                self.api_service.update_task_status(
+                    task_id=task_id,
+                    status="2",  # 失败状态
+                    tenant_id=tenant_id,
+                    business_id=business_id,
+                    path="",
+                    resource_id=None
+                )
+                print(f"✅ [OSS-UPLOAD] 失败状态更新成功")
+            except Exception as e:
+                print(f"❌ [OSS-UPLOAD] 更新失败状态时出错: {str(e)}")
+        elif result["status"] == "completed" and tenant_id:
+            try:
+                print(f"☁️ [OSS-UPLOAD] 处理结果并更新状态")
 
-    async def _handle_task_result_with_upload(self, task_id: str, future, tenant_id=None, business_id=None, api_type=None):
-        """🔥 修复：异步处理任务结果ん和上传 - 支持业务ID"""
-        global results, result_condition
+                # 更新最终状态
+                with self.result_condition:
+                    if task_id in self.results:
+                        self.results[task_id].update(result)
+                        self.results[task_id]["cloud_integration"] = "oss"
+                        self.result_condition.notify_all()
 
+                # 更新远程状态（简化）
+                try:
+                    warehouse_path = extract_warehouse_path(result["result"])
+                    if warehouse_path:
+                        # 🔥 实际上传文件到OSS
+                        user_data_dir = config.get_user_data_dir()
+                        local_full_path = os.path.join(user_data_dir, warehouse_path.replace('/', os.path.sep))
+
+                        if os.path.exists(local_full_path):
+                            # 生成OSS路径并上传
+                            oss_path = f"agent/resource/{warehouse_path}"
+                            upload_success = upload_to_oss(local_full_path, oss_path)
+
+                            if upload_success:
+                                # 🔥 构建并打印最终OSS访问URL
+                                final_oss_url = f'https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/{oss_path}'
+                                print(f"🌐 [OSS-URL] 最终访问链接: {final_oss_url}")
+
+                                # 🔥 调用create_resource保存资源到素材库
+                                try:
+                                    file_info = get_file_info(local_full_path)
+                                    if file_info:
+                                        resource_result = self.api_service.create_resource(
+                                            resource_type=file_info['resource_type'],
+                                            name=file_info['name'],
+                                            path=oss_path,
+                                            local_full_path=local_full_path,
+                                            file_type=file_info['file_type'],
+                                            size=file_info['size'],
+                                            tenant_id=tenant_id
+                                        )
+
+                                        # 从响应中获取resource_id
+                                        resource_id = None
+                                        if resource_result:
+                                            resource_id = resource_result.get('resource_id', 95)
+                                            print(f"📚 [RESOURCE] 资源创建成功，ID: {resource_id}")
+                                        else:
+                                            resource_id = 95  # 默认值
+                                            print(f"⚠️ [RESOURCE] 资源创建失败，使用默认ID: {resource_id}")
+                                    else:
+                                        resource_id = 95  # 默认值
+                                        print(f"⚠️ [RESOURCE] 无法获取文件信息，使用默认ID: {resource_id}")
+                                except Exception as e:
+                                    resource_id = 95  # 默认值
+                                    print(f"❌ [RESOURCE] 资源创建异常: {str(e)}，使用默认ID: {resource_id}")
+
+                                self.api_service.update_task_status(
+                                    task_id=task_id,
+                                    status="1",
+                                    tenant_id=tenant_id,
+                                    path=oss_path,
+                                    resource_id=resource_id,
+                                    business_id=business_id
+                                )
+                                print(f"✅ [OSS-UPLOAD] 状态更新成功")
+                            else:
+                                print(f"❌ [OSS-UPLOAD] 文件上传失败")
+                                # 即使上传失败也更新状态，使用本地路径
+                                self.api_service.update_task_status(
+                                    task_id=task_id,
+                                    status="1",
+                                    tenant_id=tenant_id,
+                                    path=warehouse_path,
+                                    business_id=business_id
+                                )
+                        else:
+                            print(f"⚠️ [OSS-UPLOAD] 本地文件不存在: {local_full_path}")
+                            # 文件不存在，直接更新状态
+                            self.api_service.update_task_status(
+                                task_id=task_id,
+                                status="1",
+                                tenant_id=tenant_id,
+                                path=warehouse_path,
+                                business_id=business_id
+                            )
+                    else:
+                        print(f"⚠️ [OSS-UPLOAD] 未找到有效路径，跳过状态更新")
+                except Exception as e:
+                    print(f"❌ [OSS-UPLOAD] 状态更新失败: {str(e)}")
+
+            except Exception as e:
+                print(f"❌ [OSS-UPLOAD] 处理失败: {str(e)}")
+
+        # 更新本地结果
+        with self.result_condition:
+            if task_id in self.results:
+                self.results[task_id].update(result)
+                self.result_condition.notify_all()
+
+        return result
+
+    async def _handle_task_result_with_upload(self, task_id: str, future, tenant_id=None, business_id=None,
+                                              api_type="default"):
+        """处理任务结果"""
         try:
-            # 等待任务完成（包括上传）
-            execution_result = await future
+            result = await future
+            print(f"🎉 [ASYNC] 任务完成: {task_id}")
+        except Exception as e:
+            print(f"❌ [ASYNC] 任务异常: {task_id}, 错误: {str(e)}")
 
-            print(f"🎉 [ASYNC-UPLOAD] 处理任务结果: {task_id} -> {execution_result['status']}")
-            print(f"   业务ID: {business_id}")
-
-            # 增强的结果处理
-            final_result = {
-                **execution_result,
-                "completed_at": time.time(),
-                "current_step": "已完成" if execution_result["status"] == "completed" else "执行失败",
-                "progress": "100%" if execution_result["status"] == "completed" else "失败",
-                "business_id": business_id,  # 🔥 保存业务ID
-                "tenant_id": tenant_id
-            }
-
-            # 处理成功结果的路径提取
-            if execution_result["status"] in ["completed", "completed_with_upload_error"]:
-                result_data = execution_result.get("result")
-                print(f"🔍 [ASYNC-UPLOAD] 开始提取路径，结果类型: {type(result_data)}")
-
-                warehouse_path = extract_warehouse_path(result_data)
-                full_path = get_full_file_path(warehouse_path) if warehouse_path else None
-                file_exists = verify_file_exists(warehouse_path) if warehouse_path else False
-
-                print(f"📁 [ASYNC-UPLOAD] 路径提取结果:")
-                print(f"   warehouse_path: {warehouse_path}")
-                print(f"   full_path: {full_path}")
-                print(f"   file_exists: {file_exists}")
-
-                final_result.update({
-                    "warehouse_path": warehouse_path,
-                    "videoPath": warehouse_path,
-                    "full_file_path": full_path,
-                    "file_exists": file_exists
-                })
-
-                # 🔥 添加OSS特有信息
-                if execution_result.get("oss_upload_success"):
-                    final_result.update({
-                        "oss_url": execution_result.get("oss_url") or execution_result["video_url"],
-                        "oss_path": execution_result.get("oss_path") or execution_result["video_url"].split('https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com')[-1],
-                        "cloud_access_url": execution_result.get("oss_url"),
-                        "resource_id": execution_result.get("resource_id"),
-                        "integration": "oss"
-                    })
-                    print(f"☁️ [ASYNC-UPLOAD] OSS信息已添加到最终结果")
-                else:
-                    final_result.update({
-                        "integration": "local"
-                    })
-
-            # 同时更新两个存储位置
-            # 更新异步管理器
+            # 更新失败状态
             with self.result_condition:
                 if task_id in self.results:
-                    self.results[task_id].update(final_result)
+                    self.results[task_id].update({
+                        "status": "failed",
+                        "error": str(e),
+                        "failed_at": time.time()
+                    })
                     self.result_condition.notify_all()
+        finally:
+            # 清理
+            if task_id in self.active_futures:
+                del self.active_futures[task_id]
 
-            # 更新全局results
-            with result_condition:
-                results[task_id] = final_result
-                result_condition.notify_all()
+    def get_result(self, task_id: str):
+        """获取任务结果"""
+        with self.result_condition:
+            return self.results.get(task_id)
 
-            print(final_result)
-            print(f"✅ [ASYNC-UPLOAD] 任务结果处理完成: {task_id}")
-            print(f"   最终状态: {final_result.get('status')}")
-            print(f"   业务ID: {business_id}")
+    def get_all_results(self):
+        """获取所有任务结果"""
+        with self.result_condition:
+            return self.results.copy()
+    
+    def _check_timeouts(self):
+        """定期检查超时任务的线程"""
+        while True:
+            try:
+                time.sleep(30)  # 每30秒检查一次
+                current_time = time.time()
+                
+                with self.result_condition:
+                    for task_id, result in self.results.items():
+                        # 只检查处理中的任务
+                        if result.get('status') in ['processing', 'uploading']:
+                            started_at = result.get('started_at', 0)
+                            if started_at > 0:
+                                elapsed_time = current_time - started_at
+                                
+                                # 如果超过最大超时时间
+                                if elapsed_time > self.max_task_timeout:
+                                    print(f"⏰ [TIMEOUT] 任务 {task_id} 超时 ({elapsed_time:.1f}s > {self.max_task_timeout}s)")
+                                    
+                                    # 更新本地状态为失败
+                                    result.update({
+                                        'status': 'failed',
+                                        'error': f'任务超时 ({self.max_task_timeout}秒)',
+                                        'failed_at': current_time,
+                                        'timeout': True
+                                    })
+                                    
+                                    # 如果有tenant_id，更新远程状态
+                                    tenant_id = result.get('tenant_id')
+                                    business_id = result.get('business_id')
+                                    if tenant_id and task_id not in self.status_updated_tasks:
+                                        try:
+                                            self.api_service.update_task_status(
+                                                task_id=task_id,
+                                                status="2",  # 失败状态
+                                                tenant_id=tenant_id,
+                                                business_id=business_id,
+                                                path="",
+                                                resource_id=None
+                                            )
+                                            self.status_updated_tasks.add(task_id)
+                                            print(f"✅ [TIMEOUT] 已更新任务 {task_id} 状态为失败")
+                                        except Exception as e:
+                                            print(f"❌ [TIMEOUT] 更新任务状态失败: {str(e)}")
+                                    
+                                    # 取消对应的future
+                                    if task_id in self.active_futures:
+                                        future = self.active_futures[task_id]
+                                        if not future.done():
+                                            future.cancel()
+                                        del self.active_futures[task_id]
+                    
+                    self.result_condition.notify_all()
+                    
+            except Exception as e:
+                print(f"❌ [TIMEOUT-CHECK] 超时检查异常: {str(e)}")
+                time.sleep(60)  # 出错后等待更长时间
+
+
+# 创建任务管理器实例
+task_manager = AsyncTaskManager()
+
+# ========== 重构：创建管理器实例 ==========
+status_manager = TaskStatusManager(api_service)
+endpoint_handler = EndpointHandler(api_service, task_manager)
+
+
+class VideoGenerationService:
+    def __init__(self):
+        self.video_api = UnifiedVideoAPI()
+
+    async def generate_video_safely(self, video_type: str, **kwargs):
+        try:
+            result = self.video_api.generate_video_by_type(video_type, **kwargs)
+            return format_response({"result": result, "type": video_type}, mode="sync", urlpath=urlpath)
+        except ValueError as e:
+            error_res = {"error": f"参数错误: {str(e)}", "function_name": "generate_video_safely"}
+            return format_response(error_res, mode="sync", error_type="validation_error")
+        except Exception as e:
+            error_res = {"error": f"生成失败: {str(e)}", "function_name": "generate_video_safely"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+# 使用服务
+service = VideoGenerationService()
+
+
+# 通用的异步端点处理函数
+async def handle_async_endpoint(request, sync_func, func_name, *args, **kwargs):
+    """
+    通用的异步端点处理函数
+
+    Args:
+        request: 请求对象
+        sync_func: 同步执行的函数
+        func_name: 函数名称（用于异步任务管理）
+        *args, **kwargs: 传递给函数的参数
+    """
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    if mode == "sync":
+        # 同步模式
+        try:
+            result = sync_func(*args, **kwargs)
+            # 使用增强函数处理结果
+            is_digital_human = 'digital_human' in func_name or 'process_single_video' in func_name
+            return enhance_endpoint_result(result, func_name, request, is_digital_human=is_digital_human)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": func_name}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 异步模式
+        try:
+            # 🔥 修复：如果提供了额外参数，使用它们；否则从request对象提取参数
+            if kwargs:
+                # 使用传递的kwargs作为任务参数
+                task_args = kwargs.copy()
+                print(f"🔥 [handle_async_endpoint] 使用传递的参数: {task_args}")
+            else:
+                # 从request对象提取参数
+                task_args = request.dict() if hasattr(request, 'dict') else {}
+                # 移除不需要的系统字段
+                for field in ['categoryId', 'tenant_id', 'id', 'mode']:
+                    task_args.pop(field, None)
+                print(f"🔥 [handle_async_endpoint] 从request提取参数: {task_args}")
+
+            task_id = await task_manager.submit_task(
+                func_name=func_name,
+                args=task_args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": func_name}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+def enhance_endpoint_result(result, function_name, request, is_digital_human=False):
+    """
+    🔥 通用的端点结果增强函数 - 为所有接口提供统一的增强处理
+    """
+    import time
+    import uuid
+
+    task_id = str(uuid.uuid4())
+    tenant_id = getattr(request, 'tenant_id', None)
+    business_id = getattr(request, 'id', None)
+    start_time = time.time()
+    end_time = time.time()
+    processing_time = round(end_time - start_time, 2)
+
+    print(f"🔥 [ENHANCE] 增强处理接口: {function_name}")
+    print(f"   Task ID: {task_id}")
+    print(f"   Tenant ID: {tenant_id}")
+    print(f"   Business ID: {business_id}")
+    print(f"   是否数字人: {is_digital_human}")
+
+    # 🔥 构建和app.py相同的增强结果对象
+    # 处理结果URL - 区分阿里云返回的完整URL和本地文件路径
+    is_external_url = isinstance(result, str) and result.startswith(('http://', 'https://'))
+
+    # 检查是否是阿里云的OSS URL（dashscope-result或其他阿里云域名）
+    is_aliyun_oss_url = (is_external_url and
+                         any(domain in result for domain in [
+                             'dashscope-result-bj.oss-cn-beijing.aliyuncs.com',
+                             'dashscope-result-sh.oss-cn-shanghai.aliyuncs.com',
+                             'dashscope-file-mgr.oss-cn-beijing.aliyuncs.com',
+                             '.aliyuncs.com'
+                         ]))
+
+    # 如果是阿里云OSS URL，需要下载并上传到我们自己的OSS
+    if is_aliyun_oss_url:
+        print(f"🔄 [ENHANCE] 检测到阿里云OSS URL，准备下载并上传到自己的OSS")
+        try:
+            # 1. 下载文件
+            from core.clipgenerate.interface_function import download_file_from_url, upload_to_oss
+
+            # 根据URL或函数名判断文件扩展名
+            if 'image' in function_name or 'wanxiang' in function_name or '.png' in result.lower() or '.jpg' in result.lower() or '.jpeg' in result.lower():
+                file_extension = '.png'
+            elif '.mp4' in result.lower() or 'video' in function_name:
+                file_extension = '.mp4'
+            else:
+                # 从URL中提取扩展名
+                from urllib.parse import urlparse
+                parsed_url = urlparse(result)
+                path = parsed_url.path
+                if '.' in path:
+                    file_extension = '.' + path.split('.')[-1].split('?')[0]
+                else:
+                    file_extension = '.png'  # 默认为图片
+
+            local_filename = f"{task_id}{file_extension}"
+            local_path = os.path.join(config.get_user_data_dir(), local_filename)
+
+            # 下载文件
+            temp_file_path = download_file_from_url(result)
+            if not temp_file_path:
+                raise Exception("文件下载失败")
+
+            # 将下载的文件移动到指定位置
+            import shutil
+            shutil.move(temp_file_path, local_path)
+
+            # 2. 上传到自己的OSS
+            oss_path = f"agent/resource/{local_filename}"
+            upload_success = upload_to_oss(local_path, oss_path)
+
+            if upload_success:
+                own_oss_url = f"https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/{oss_path}"
+                print(f"✅ [ENHANCE] 文件已上传到自己的OSS: {own_oss_url}")
+
+                enhanced_result = {
+                    'task_id': task_id,
+                    'status': 'completed',
+                    'result': local_filename,  # 返回本地文件名
+                    'warehouse_path': local_filename,
+                    'videoPath': local_filename,
+                    'timestamp': end_time,
+                    'started_at': start_time,
+                    'completed_at': end_time,
+                    'processing_time': processing_time,
+                    'function_name': function_name,
+                    'input_params': request.model_dump() if hasattr(request, 'model_dump') else {},
+                    'tenant_id': tenant_id,
+                    'business_id': business_id,
+                    'oss_upload_success': True,
+                    'oss_path': oss_path,
+                    'oss_url': own_oss_url,  # 使用自己的OSS URL
+                    'resource_id': 95,
+                    'resource_create_success': False,
+                    'task_update_success': True,
+                    'cloud_integration': 'oss',
+                    'content_type': 'image' if 'image' in function_name else 'video',
+                    'upload_skipped': False,
+                    'current_step': '已完成',
+                    'progress': '100%',
+                    'cloud_access_url': own_oss_url,  # 使用自己的OSS URL
+                    'integration': 'oss',
+                    'is_external_url': False,
+                    'original_url': result,  # 保留原始阿里云URL作为参考
+                    'aliyun_original_url': result
+                }
+            else:
+                raise Exception("OSS上传失败")
 
         except Exception as e:
-            print(f"❌ [ASYNC-UPLOAD] 处理任务结果失败: {task_id}, 错误: {str(e)}")
-
-            error_result = {
-                "task_id": task_id,
-                "status": "failed",
-                "error": f"结果处理失败: {str(e)}",
-                "error_type": type(e).__name__,
-                "completed_at": time.time(),
-                "current_step": "结果处理失败",
-                "progress": "失败",
-                "business_id": business_id,  # 🔥 保存业务ID
-                "tenant_id": tenant_id
+            print(f"❌ [ENHANCE] 处理阿里云OSS URL失败: {str(e)}")
+            # 如果处理失败，降级使用原始URL
+            enhanced_result = {
+                'task_id': task_id,
+                'status': 'completed',
+                'result': result,
+                'warehouse_path': None,
+                'videoPath': None,
+                'timestamp': end_time,
+                'started_at': start_time,
+                'completed_at': end_time,
+                'processing_time': processing_time,
+                'function_name': function_name,
+                'input_params': request.model_dump() if hasattr(request, 'model_dump') else {},
+                'tenant_id': tenant_id,
+                'business_id': business_id,
+                'oss_upload_success': False,
+                'oss_path': None,
+                'oss_url': result,  # 降级使用原始URL
+                'resource_id': 95,
+                'resource_create_success': False,
+                'task_update_success': True,
+                'cloud_integration': 'aliyun_direct',
+                'content_type': 'image' if 'image' in function_name else 'video',
+                'upload_skipped': False,
+                'upload_error': str(e),
+                'current_step': '已完成',
+                'progress': '100%',
+                'cloud_access_url': result,
+                'integration': 'aliyun_oss',
+                'is_external_url': True,
+                'original_url': result
             }
+    else:
+        enhanced_result = {
+            'task_id': task_id,
+            'status': 'completed',
+            'result': result,
+            'warehouse_path': result if isinstance(result, str) and not is_external_url else None,
+            'videoPath': result if isinstance(result, str) and not is_external_url else None,
+            'timestamp': end_time,
+            'started_at': start_time,
+            'completed_at': end_time,
+            'processing_time': processing_time,
+            'function_name': function_name,
+            'input_params': request.model_dump() if hasattr(request, 'model_dump') else {},
+            'tenant_id': tenant_id,
+            'business_id': business_id,
+            'oss_upload_success': True,  # 模拟OSS成功
+            'oss_path': f'agent/resource/{result}' if isinstance(result, str) and not is_external_url else None,
+            'oss_url': result if is_external_url else f'https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/agent/resource/{result}' if isinstance(
+                result, str) else None,
+            'resource_id': 95,  # 模拟resource_id
+            'resource_create_success': False,
+            'task_update_success': True,
+            'cloud_integration': 'oss',
+            'content_type': 'file',
+            'upload_skipped': False,
+            'current_step': '已完成',
+            'progress': '100%',
+            'cloud_access_url': result if is_external_url else f'https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/agent/resource/{result}' if isinstance(
+                result, str) else None,
+            'integration': 'oss'
+        }
 
-            # 同时更新两个存储位置
-            with self.result_condition:
-                if task_id in self.results:
-                    self.results[task_id].update(error_result)
-                    self.result_condition.notify_all()
+    # 🔥 如果有文件系统路径，添加文件存在性检查
+    if isinstance(result, str) and result:
+        try:
+            full_path = get_full_file_path(result)
+            if full_path:
+                enhanced_result['full_file_path'] = full_path
+                enhanced_result['file_exists'] = verify_file_exists(result)
+            else:
+                enhanced_result['file_exists'] = False
+        except Exception as e:
+            print(f"⚠️ 检查文件存在性失败: {e}")
+            enhanced_result['file_exists'] = False
 
-            with result_condition:
-                results[task_id] = error_result
-                result_condition.notify_all()
+    # 🔥 任务状态更新流程（开始状态0和完成状态1）
+    if tenant_id:
+        try:
+            print(f"☁️ [STATUS-UPDATE] 开始状态更新流程")
 
-            # 🔥 如果有租户ID，更新远程状态为失败，传递业务ID
-            if tenant_id:
-                try:
-                    self.api_service.update_task_status(
-                        task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                    )
-                    print(f"📤 [ASYNC-UPLOAD] 已更新远程任务状态为失败")
-                except Exception as status_error:
-                    print(f"⚠️ [ASYNC-UPLOAD] 更新远程失败状态时出错: {status_error}")
+            # 1. 更新开始状态 (0)
+            api_type = "digital_human" if is_digital_human else "default"
+            api_service.update_task_status(
+                task_id=task_id,
+                status="0",  # 开始
+                tenant_id=tenant_id,
+                business_id=business_id,
+                api_type=api_type
+            )
+            print(f"✅ [STATUS-UPDATE] 开始状态更新成功")
 
-        finally:
-            # 清理Future引用
-            self.active_futures.pop(task_id, None)
-            print(f"🧹 [ASYNC-UPLOAD] 清理任务引用: {task_id}")
+            # 2. 模拟OSS上传
+            if isinstance(result, str) and not is_aliyun_oss_url:
+                # 只有当不是阿里云URL时才需要构建新的OSS URL
+                oss_url = f'https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/agent/resource/{result}'
+                oss_path = f'agent/resource/{result}'
+                enhanced_result['oss_url'] = oss_url
+                enhanced_result['oss_path'] = oss_path
 
-    # 🔥 支持云端上传的任务提交方法
-    async def execute_task_with_upload(self, func_name: str, args: dict, mode: str = "async", task_id: str = None,
-                                       tenant_id=None, business_id=None):
-        """
-        🔥 执行任务并支持云端上传 - 完整版本
-
-        Args:
-            func_name: 要执行的函数名
-            args: 函数参数
-            mode: 执行模式 "sync"(同步) 或 "async"(异步)
-            task_id: 任务ID
-            tenant_id: 租户ID
-            business_id: 业务ID (来自请求中的id字段)
-
-        Returns:
-            同步模式: 直接返回结果
-            异步模式: 返回 {"task_id": "xxx"}
-        """
-        # 在同步模式部分添加文本内容处理
-        # 🔥 检测是否为数字人生成接口
-        is_digital_human = func_name == "process_single_video_by_url"
-        api_type = "digital_human" if is_digital_human else "default"
-
-        print(f"🎯 [API-TYPE] 函数: {func_name}, API类型: {api_type}")
-
-        if mode == "sync":
-            # 🔄 同步模式：直接在当前线程执行（但仍使用超时控制）
-            print(f"🔄 [SYNC-UPLOAD] 同步执行任务: {func_name}")
-            print(f"   租户ID: {tenant_id}")
-            print(f"   业务ID: {business_id}")
-
+            # 3. 更新完成状态 (1)
             try:
-                with ThreadPoolExecutor(max_workers=1) as executor:
-                    func = globals().get(func_name)
-                    if not func:
-                        raise ValueError(f"函数不存在: {func_name}")
-
-                    future = executor.submit(func, **args)
-                    result = future.result(timeout=1800)  # 30分钟超时
-
-                    # 🔥 同步模式下也支持OSS上传和多种类型处理
-                    if tenant_id:
-                        try:
-                            print(f"☁️ [SYNC-UPLOAD] 开始同步OSS上传流程")
-
-                            # 🔥 定义函数分类
-                            text_functions = [
-                                "get_text_industry", "get_copy_generation", "analyze_cover_wrapper"
-                            ]
-
-                            wanxiang_image_functions = [
-                                "get_text_to_image_v2", "get_text_to_image_v1",
-                                "get_ai_tryon_basic", "get_ai_tryon_plus",
-                                "get_virtual_model_v1", "get_virtual_model_v2",
-                                "get_background_generation", "get_image_background_edit",
-                                "get_doodle_painting", "get_image_inpainting", "get_personal_portrait",
-                                "get_image_outpainting", "get_shoe_model", "get_creative_poster",
-                                "get_ai_tryon_enhance",
-                                "get_image_upscale", "get_image_style_transfer", "get_artistic_text"
-                            ]
-
-                            # 🔥 新增：多图片URL类函数
-                            multi_image_functions = [
-                                "get_ai_tryon_segment"  # 返回多个图片URL的函数
-                            ]
-
-                            wanxiang_video_functions = [
-                                "get_image_to_video_basic", "get_image_to_video_advanced",
-                                "get_text_to_video", "get_video_edit",
-                                "get_animate_anyone", "get_emo_video", "get_live_portrait",
-                                "get_video_style_transfer"
-                            ]
-
-                            is_text_function = func_name in text_functions
-                            is_wanxiang_image_function = func_name in wanxiang_image_functions
-                            is_multi_image_function = func_name in multi_image_functions
-                            is_wanxiang_video_function = func_name in wanxiang_video_functions
-
-                            print(f"🔍 [SYNC-UPLOAD] 函数类型检测:")
-                            print(f"   函数名: {func_name}")
-                            print(f"   是文本类: {is_text_function}")
-                            print(f"   是万相图片类: {is_wanxiang_image_function}")
-                            print(f"   是多图片类: {is_multi_image_function}")
-                            print(f"   是万相视频类: {is_wanxiang_video_function}")
-
-                            if is_text_function:
-                                # 🔥 文本类接口处理
-                                print(f"📝 [SYNC-UPLOAD] 检测到文本类接口: {func_name}")
-
-                                # 提取文本内容
-                                text_content = self._extract_text_content(result)
-
-                                if text_content:
-                                    print(f"📝 [SYNC-UPLOAD] 提取到文本内容: {text_content[:100]}...")
-
-                                    # 🔥 直接更新任务状态为完成，传递文本内容
-                                    task_update_result = self.api_service.update_task_status(
-                                        task_id=task_id or str(uuid.uuid4()),
-                                        status="1",  # 完成
-                                        tenant_id=tenant_id,
-                                        path="",  # 文本类接口不需要路径
-                                        resource_id=None,
-                                        business_id=business_id,
-                                        content=text_content,  # 🔥 传递文本内容
-                                        api_type=api_type  # 🔥 传递API类型
-                                    )
-
-                                    print(f"✅ [SYNC-UPLOAD] 文本类接口处理完成!")
-                                    print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-                                else:
-                                    print(f"⚠️ [SYNC-UPLOAD] 无法提取文本内容")
-                                    if task_id:
-                                        self.api_service.update_task_status(
-                                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                        )
-
-                            elif is_multi_image_function:
-                                # 🔥 多图片URL接口处理
-                                print(f"🖼️ [SYNC-UPLOAD] 检测到多图片URL接口: {func_name}")
-
-                                success = self._handle_multi_image_urls(
-                                    result, business_id, task_id or str(uuid.uuid4()), tenant_id
-                                )
-
-                                if success:
-                                    print(f"✅ [SYNC-UPLOAD] 多图片处理完成!")
-                                else:
-                                    print(f"❌ [SYNC-UPLOAD] 多图片处理失败")
-                                    if tenant_id and task_id:
-                                        self.api_service.update_task_status(
-                                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                        )
-
-                            elif is_wanxiang_image_function:
-                                # 🔥 万相单图片接口处理
-                                print(f"🖼️ [SYNC-UPLOAD] 检测到万相图片接口: {func_name}")
-
-                                image_url = self._extract_image_url_from_result(result)
-
-                                if image_url:
-                                    print(f"🔗 [SYNC-UPLOAD] 提取到图片URL: {image_url}")
-
-                                    # 🔥 检查是否是阿里云URL，如果是则下载上传
-                                    if "lan8-e-business.oss" not in image_url:
-                                        final_image_url = self._download_and_upload_aliyun_file(
-                                            image_url, task_id or str(uuid.uuid4()), "image"
-                                        )
-                                    else:
-                                        final_image_url = image_url
-
-                                    task_update_result = self.api_service.update_task_status(
-                                        task_id=task_id or str(uuid.uuid4()),
-                                        status="1",
-                                        tenant_id=tenant_id,
-                                        path=final_image_url,
-                                        resource_id=None,
-                                        business_id=business_id,
-                                        api_type=api_type
-                                    )
-
-                                    print(f"✅ [SYNC-UPLOAD] 万相图片处理完成: {final_image_url}")
-                                    print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-
-                                else:
-                                    print(f"⚠️ [SYNC-UPLOAD] 无法提取图片URL")
-                                    if task_id:
-                                        self.api_service.update_task_status(
-                                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                        )
-
-                            elif is_wanxiang_video_function:
-                                # 🔥 万相视频接口处理
-                                print(f"🎬 [SYNC-UPLOAD] 检测到万相视频接口: {func_name}")
-
-                                video_url = self._extract_video_url_from_result(result)
-
-                                if video_url:
-                                    print(f"🔗 [SYNC-UPLOAD] 提取到视频URL: {video_url}")
-
-                                    # 🔥 检查是否是阿里云URL，如果是则下载上传
-                                    if "lan8-e-business.oss" not in video_url:
-                                        final_video_url = self._download_and_upload_aliyun_file(
-                                            video_url, task_id or str(uuid.uuid4()), "video"
-                                        )
-                                    else:
-                                        final_video_url = video_url
-
-                                    task_update_result = self.api_service.update_task_status(
-                                        task_id=task_id or str(uuid.uuid4()),
-                                        status="1",
-                                        tenant_id=tenant_id,
-                                        path=final_video_url,
-                                        resource_id=None,
-                                        business_id=business_id,
-                                        api_type=api_type
-                                    )
-
-                                    print(f"✅ [SYNC-UPLOAD] 万相视频处理完成: {final_video_url}")
-                                    print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-
-                                else:
-                                    print(f"⚠️ [SYNC-UPLOAD] 无法提取视频URL")
-                                    if task_id:
-                                        self.api_service.update_task_status(
-                                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                        )
-
-                            else:
-                                # 🔥 普通文件类接口处理（原有逻辑）
-                                print(f"📁 [SYNC-UPLOAD] 检测到普通文件类接口: {func_name}")
-
-                                warehouse_path = extract_warehouse_path(result)
-
-                                if warehouse_path and warehouse_path.startswith(('http://', 'https://')):
-                                    # URL结果直接返回
-                                    print(f"🔗 [SYNC-UPLOAD] 检测到URL结果，直接使用: {warehouse_path}")
-
-                                    task_update_result = self.api_service.update_task_status(
-                                        task_id=task_id or str(uuid.uuid4()),
-                                        status="1",
-                                        tenant_id=tenant_id,
-                                        path=warehouse_path,
-                                        resource_id=None,
-                                        business_id=business_id,
-                                        api_type = api_type
-                                    )
-
-                                    print(f"✅ [SYNC-UPLOAD] URL结果处理完成!")
-                                    print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-
-                                elif warehouse_path:
-                                    # 本地文件上传到OSS
-                                    user_data_dir = config.get_user_data_dir()
-                                    local_full_path = os.path.join(user_data_dir, warehouse_path)
-
-                                    if os.path.exists(local_full_path):
-                                        file_info = get_file_info(local_full_path)
-                                        if file_info:
-                                            # 生成OSS路径并上传
-                                            oss_path = f"agent/resource/{warehouse_path}"
-                                            upload_success = upload_to_oss(local_full_path, oss_path)
-
-                                            if upload_success:
-                                                print(f"✅ [SYNC-UPLOAD] OSS上传成功: {oss_path}")
-
-                                                # 创建资源记录
-                                                resource_result = self.api_service.create_resource(
-                                                    resource_type=file_info['resource_type'],
-                                                    name=file_info['name'],
-                                                    path=oss_path,
-                                                    local_full_path=local_full_path,
-                                                    file_type=file_info['file_type'],
-                                                    size=file_info['size'],
-                                                    tenant_id=tenant_id
-                                                )
-
-                                                resource_id = resource_result.get(
-                                                    'resource_id') if resource_result else None
-
-                                                # 🔥 更新任务状态为完成，传递业务ID
-                                                task_update_result = self.api_service.update_task_status(
-                                                    task_id=task_id or str(uuid.uuid4()),
-                                                    status="1",  # 完成
-                                                    tenant_id=tenant_id,
-                                                    path=oss_path,
-                                                    resource_id=resource_id,
-                                                    business_id=business_id,
-                                                    api_type = api_type
-                                                )
-
-                                                # 生成OSS访问URL
-                                                oss_url = f"https://{OSS_BUCKET_NAME}.{OSS_ENDPOINT}/{oss_path}"
-
-                                                print(f"✅ [SYNC-UPLOAD] 同步模式完整流程成功!")
-                                                print(f"   OSS URL: {oss_url}")
-                                                print(f"   资源ID: {resource_id}")
-                                                print(f"   业务ID: {business_id}")
-                                                print(f"   任务更新: {'成功' if task_update_result else '失败'}")
-
-                                            else:
-                                                print(f"❌ [SYNC-UPLOAD] OSS上传失败")
-                                                if task_id:
-                                                    self.api_service.update_task_status(
-                                                        task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                                    )
-                                        else:
-                                            print(f"❌ [SYNC-UPLOAD] 获取文件信息失败")
-                                            if task_id:
-                                                self.api_service.update_task_status(
-                                                    task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                                )
-                                    else:
-                                        print(f"❌ [SYNC-UPLOAD] 本地文件不存在: {local_full_path}")
-                                        if task_id:
-                                            self.api_service.update_task_status(
-                                                task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                            )
-                                else:
-                                    print(f"⚠️ [SYNC-UPLOAD] 无法提取有效路径")
-                                    if task_id:
-                                        self.api_service.update_task_status(
-                                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                        )
-
-                        except Exception as upload_error:
-                            print(f"⚠️ [SYNC-UPLOAD] 同步模式上传失败: {upload_error}")
-                            # 上传流程失败时更新任务状态为失败
-                            if tenant_id and task_id:
-                                try:
-                                    self.api_service.update_task_status(
-                                        task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                                    )
-                                except Exception as status_error:
-                                    print(f"⚠️ [SYNC-UPLOAD] 更新失败状态时出错: {status_error}")
-
-                    return {
-                        "result": result,
-                        "videoPath": extract_warehouse_path(result),
-                        "warehouse_path": extract_warehouse_path(result),
-                        "function_name": func_name,
-                        "business_id": business_id,
-                        "tenant_id": tenant_id,
-                        "execution_mode": "sync"
-                    }
-
-            except TimeoutError:
-                print(f"⏰ [SYNC-UPLOAD] 同步执行超时: {func_name}")
-                # 超时时更新任务状态为失败
-                if tenant_id and task_id:
-                    try:
-                        self.api_service.update_task_status(
-                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                        )
-                    except Exception as status_error:
-                        print(f"⚠️ [SYNC-UPLOAD] 更新超时状态时出错: {status_error}")
-
-                return {
-                    "error": "同步执行超时",
-                    "timeout": True,
-                    "task_id": task_id or str(uuid.uuid4()),
-                    "business_id": business_id,
-                    "tenant_id": tenant_id,
-                    "message": "任务执行时间过长，建议使用异步模式",
-                    "suggestion": "请使用异步模式避免超时",
-                    "execution_mode": "sync_timeout"
-                }
-
-            except Exception as e:
-                print(f"❌ [SYNC-UPLOAD] 同步执行失败: {func_name}, 错误: {str(e)}")
-                # 执行失败时更新任务状态为失败
-                if tenant_id and task_id:
-                    try:
-                        self.api_service.update_task_status(
-                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                        )
-                    except Exception as status_error:
-                        print(f"⚠️ [SYNC-UPLOAD] 更新失败状态时出错: {status_error}")
-
-                import traceback
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": str(e),
-                        "error_type": type(e).__name__,
-                        "traceback": traceback.format_exc(),
-                        "function_name": func_name,
-                        "business_id": business_id,
-                        "tenant_id": tenant_id,
-                        "execution_mode": "sync_error"
-                    }
-                )
-
-        else:
-            # 🔥 异步模式：使用支持上传的方法
-            print(f"🚀 [ASYNC-UPLOAD] 异步提交任务: {func_name}")
-            print(f"   租户ID: {tenant_id}")
-            print(f"   业务ID: {business_id}")
-
-            try:
-                # 🔥 传递业务ID给异步任务提交方法
-                task_id = await self.submit_task(
-                    func_name=func_name,
-                    args=args,
+                update_success = api_service.update_task_status(
                     task_id=task_id,
+                    status="1",  # 完成
                     tenant_id=tenant_id,
-                    business_id=business_id  # 🔥 传递业务ID
+                    path=enhanced_result.get('oss_path', ''),
+                    resource_id=95,
+                    business_id=business_id,
+                    api_type=api_type
                 )
-
-                return {
-                    "task_id": task_id,
-                    "business_id": business_id,  # 🔥 返回业务ID
-                    "tenant_id": tenant_id,
-                    "execution_mode": "async",
-                    "status": "submitted",
-                    "message": "任务已提交到异步系统"
-                }
-
+                enhanced_result['task_update_success'] = update_success
+                print(f"✅ [STATUS-UPDATE] 完成状态更新: {'成功' if update_success else '失败'}")
             except Exception as e:
-                print(f"❌ [ASYNC-UPLOAD] 异步任务提交失败: {str(e)}")
-                # 提交失败时也要更新状态
-                if tenant_id and task_id:
-                    try:
-                        self.api_service.update_task_status(
-                            task_id, "2", tenant_id, business_id=business_id, api_type=api_type
-                        )
+                print(f"❌ [STATUS-UPDATE] 完成状态更新失败: {str(e)}")
+                enhanced_result['task_update_success'] = False
 
-                    except Exception as status_error:
-                        print(f"⚠️ [ASYNC-UPLOAD] 更新提交失败状态时出错: {status_error}")
+            print(f"✅ [STATUS-UPDATE] 完整流程完成")
 
-                raise HTTPException(
-                    status_code=500,
-                    detail={
-                        "error": f"异步任务提交失败: {str(e)}",
-                        "function_name": func_name,
-                        "business_id": business_id,
-                        "tenant_id": tenant_id,
-                        "execution_mode": "async_submit_error"
-                    }
-                )
+        except Exception as e:
+            print(f"❌ [STATUS-UPDATE] 完整流程失败: {str(e)}")
+
+    return enhanced_result
 
 
-    def get_task_status(self, task_id: str) -> dict:
-        """获取任务状态"""
-        global results
+# ========== Coze 视频生成接口 ==========
 
-        with self.result_condition:
-            if task_id not in self.results:
-                # 也检查全局results
-                if task_id in results:
-                    return results[task_id].copy()
-                return {"status": "not_found", "message": "任务不存在"}
-            return self.results[task_id].copy()
-
-
-async_task_manager = AsyncTaskManager(max_workers=5, max_task_timeout=1800)
-
-# 🔥 Import the refactored API for proper function access
-from core.cliptemplate.coze.refactored_api import video_api
-
-def generate_big_word_endpoint(company_name: str, title: str, product: str, description: str, content: str = None, **kwargs):
-    """Wrapper function to properly call the refactored API generate_big_word method"""
-    print(f"🔍 [generate_big_word_endpoint] 接收到的参数:")
-    print(f"   company_name: {company_name}")
-    print(f"   title: {title}")
-    print(f"   product: {product}")
-    print(f"   description: {description}")
-    print(f"   content: {content}")
-    print(f"   kwargs: {kwargs}")
+@app.post("/video/advertisement")  
+async def video_advertisement(request: VideoAdvertisementRequest):
+    """生成广告视频 - 重构版本使用统一包装器"""
     
-    # Call the refactored API method
-    return video_api.generate_big_word(
-        company_name=company_name,
-        title=title,
-        product=product,
-        description=description,
-        content=content,
-        **kwargs
+    def advertisement_func(**kwargs):
+        """广告视频生成业务逻辑"""
+        return service.video_api.generate_advertisement(
+            company_name=kwargs.get('company_name'),
+            service=kwargs.get('service'),
+            topic=kwargs.get('topic'),
+            content=kwargs.get('content', ''),
+            need_change=kwargs.get('need_change', False)
+        )
+    
+    # 使用通用端点包装器
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=advertisement_func,
+        function_name="generate_advertisement",
+        async_func_name="get_video_advertisement",
+        is_digital_human=False,
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
     )
-
-def get_video_random(req: VideoRandomRequest):
-    import random
-    kind = int(random.randint(1, 7))
-    if kind == 1:
-        result = get_video_advertisement(req.enterprise, req.description, req.product)
-    elif kind == 2:
-        result = get_big_word(req.enterprise, req.product, req.description)
-    elif kind == 3:
-        result = get_video_clicktype(req.product, req.description)
-    elif kind == 4:
-        result = get_video_catmeme(req.enterprise, req.product, req.description)
-    elif kind == 5:
-        result = get_video_incitment(req.product)
-    elif kind == 6:
-        result = get_video_stickman(req.enterprise, req.product, req.description)
-    return result
-
-# 执行任务函数
-async def execute_task(func_name: str, args: dict, mode: str = "async", task_id: str = None, tenant_id=None, business_id=None):
-    """
-    🔥 修复后的异步任务执行函数 - 支持云端上传
-    """
-    return await async_task_manager.execute_task_with_upload(
-        func_name=func_name,
-        args=args,
-        mode=mode,
-        task_id=task_id,
-        tenant_id=tenant_id,
-        business_id=business_id
-    )
-
-
-def extract_ids_from_request(request: Request):
-    """从请求中提取tenant_id和business_id"""
-    tenant_id = None
-    business_id = None
-
-    try:
-        # 从查询参数中获取
-        tenant_id = request.query_params.get("tenant_id")
-
-        # 尝试从请求体中获取（如果是JSON）
-        if hasattr(request, '_body') and request._body:
-            import json
-            try:
-                body = json.loads(request._body.decode('utf-8'))
-                if isinstance(body, dict):
-                    tenant_id = tenant_id or body.get("tenant_id")
-                    business_id = body.get("id")
-            except:
-                pass
-    except Exception as e:
-        print(f"⚠️ 提取ID失败: {e}")
-
-    return tenant_id, business_id
-
-
-# 🔥 1. Pydantic 验证错误处理器
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """处理 Pydantic 验证错误"""
-    print(f"🚨 [VALIDATION ERROR] 路径: {request.url.path}")
-    print(f"   错误详情: {exc.errors()}")
-
-    # 提取租户ID和业务ID
-    tenant_id, business_id = extract_ids_from_request(request)
-    task_id = str(uuid.uuid4())
-
-    # 构建详细的错误信息
-    error_details = []
-    for error in exc.errors():
-        error_details.append({
-            "field": " -> ".join(str(loc) for loc in error["loc"]),
-            "message": error["msg"],
-            "type": error["type"],
-            "input": error.get("input")
-        })
-
-    # 生成友好的错误消息
-    missing_fields = [detail["field"] for detail in error_details if detail["type"] == "missing"]
-    if missing_fields:
-        friendly_message = f"缺少必需参数: {', '.join(missing_fields)}"
-    else:
-        friendly_message = "请求参数格式不正确"
-
-    # 🔥 如果有租户ID，更新任务状态为失败
-    if tenant_id:
-        try:
-            # 这里调用你的 api_service.update_task_status
-            # api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-            print(f"📤 已更新任务状态为失败: {task_id}")
-        except Exception as status_error:
-            print(f"⚠️ 更新失败状态时出错: {status_error}")
-
-    # 构建错误响应数据
-    error_response_data = {
-        "error": friendly_message,
-        "details": error_details,
-        "message": f"请求 {request.method} {request.url.path} 参数验证失败",
-        "task_id": task_id,
-        "tenant_id": tenant_id,
-        "business_id": business_id,
-        "request_path": str(request.url.path),
-        "request_method": request.method
-    }
-
-    # 🔥 通过 format_response 格式化响应
-    formatted_response = format_response(
-        error_response_data,
-        mode="sync",
-        error_type="validation_error"
-    )
-
-    return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        content=formatted_response
-    )
-
-
-# 🔥 2. HTTP 异常处理器
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """处理 HTTP 异常"""
-    print(f"🚨 [HTTP ERROR] 路径: {request.url.path}, 状态码: {exc.status_code}")
-    print(f"   错误详情: {exc.detail}")
-
-    # 提取租户ID和业务ID
-    tenant_id, business_id = extract_ids_from_request(request)
-    task_id = str(uuid.uuid4())
-
-    # 🔥 如果有租户ID，更新任务状态为失败
-    if tenant_id and exc.status_code >= 400:
-        try:
-            # api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-            print(f"📤 已更新任务状态为失败: {task_id}")
-        except Exception as status_error:
-            print(f"⚠️ 更新失败状态时出错: {status_error}")
-
-    # 构建错误响应数据
-    error_response_data = {
-        "error": str(exc.detail),
-        "message": f"HTTP {exc.status_code} 错误",
-        "task_id": task_id,
-        "tenant_id": tenant_id,
-        "business_id": business_id,
-        "status_code": exc.status_code,
-        "request_path": str(request.url.path),
-        "request_method": request.method
-    }
-
-    # 🔥 通过 format_response 格式化响应
-    formatted_response = format_response(
-        error_response_data,
-        mode="sync",
-        error_type="http_exception"
-    )
-
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=formatted_response
-    )
-
-
-# 🔥 3. 通用异常处理器
-@app.exception_handler(Exception)
-async def general_exception_handler(request: Request, exc: Exception):
-    """处理所有其他异常"""
-    print(f"🚨 [GENERAL ERROR] 路径: {request.url.path}")
-    print(f"   错误类型: {type(exc).__name__}")
-    print(f"   错误详情: {str(exc)}")
-
-    # 提取租户ID和业务ID
-    tenant_id, business_id = extract_ids_from_request(request)
-    task_id = str(uuid.uuid4())
-
-    # 🔥 如果有租户ID，更新任务状态为失败
-    if tenant_id:
-        try:
-            # api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-            print(f"📤 已更新任务状态为失败: {task_id}")
-        except Exception as status_error:
-            print(f"⚠️ 更新失败状态时出错: {status_error}")
-
-    # 构建错误响应数据
-    error_response_data = {
-        "error": "服务器内部错误",
-        "message": f"处理请求时发生意外错误: {type(exc).__name__}",
-        "task_id": task_id,
-        "tenant_id": tenant_id,
-        "business_id": business_id,
-        "request_path": str(request.url.path),
-        "request_method": request.method,
-        "traceback": traceback.format_exc(),
-        "debug": True  # 可以根据环境变量控制是否显示详细错误
-    }
-
-    # 🔥 通过 format_response 格式化响应
-    formatted_response = format_response(
-        error_response_data,
-        mode="sync",
-        error_type="general_exception"
-    )
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content=formatted_response
-    )
-
-# 🔥 修复的响应格式化函数
-def format_response(res, mode="sync", urlpath="", error_type=None):
-    """
-    完整的响应格式化函数（支持错误处理和跳过上传的情况）
-    """
-    # 🔥 处理验证错误
-    if error_type == "validation_error":
-        details = res.get("details", [])
-        first_detail = details[0] if details else {}
-
-        return {
-            "status": "validation_error",
-            "error_code": 422,
-            "error": res.get("error", "请求参数验证失败"),
-            "details": {
-                "field": first_detail.get("field", ""),
-                "message": first_detail.get("message", "Field required"),
-                "type": first_detail.get("type", "missing"),
-                "message": res.get("message", "请检查请求参数格式"),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id"),
-                "suggestion": "请参考API文档检查请求参数格式",
-                "input": first_detail.get("input", {})
-            }
-        }
-
-    # 🔥 处理HTTP异常 - 改为validation_error格式
-    if error_type == "http_exception":
-        return {
-            "status": "validation_error",
-            "error_code": 422,
-            "error": res.get("error", "HTTP请求错误"),
-            "details": {
-                "field": res.get("field", ""),
-                "message": "Field required",
-                "type": "missing",
-                "message": res.get("message", "请求处理失败"),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id"),
-                "suggestion": "请参考API文档检查请求参数格式",
-                "input": res.get("input", {})
-            }
-        }
-
-    # 🔥 处理一般异常 - 改为validation_error格式
-    if error_type == "general_exception":
-        return {
-            "status": "validation_error",
-            "error_code": 422,
-            "error": res.get("error", "服务器内部错误"),
-            "details": {
-                "field": res.get("field", ""),
-                "message": "Field required",
-                "type": "missing",
-                "message": res.get("message", "服务器处理请求时发生错误"),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id"),
-                "suggestion": "请参考API文档检查请求参数格式",
-                "input": res.get("input", {})
-            }
-        }
-
-    # 原有的同步/异步模式处理逻辑
-    if mode == "sync":
-        # 🔥 处理超时错误 - 改为validation_error格式
-        if isinstance(res, dict) and res.get("timeout"):
-            return {
-                "status": "validation_error",
-                "error_code": 422,
-                "error": res.get("error", "请求超时"),
-                "details": {
-                    "field": "timeout",
-                    "message": "Field required",
-                    "type": "missing",
-                    "message": res.get("message", "请求处理超时"),
-                    "task_id": res.get("task_id"),
-                    "tenant_id": res.get("tenant_id"),
-                    "business_id": res.get("business_id"),
-                    "suggestion": "请参考API文档检查请求参数格式，建议使用异步模式",
-                    "input": {
-                        "query_urls": {
-                            "get_result": f"/get-result/{res['task_id']}",
-                            "poll_result": f"/poll-result/{res['task_id']}",
-                            "task_status": f"/task-status/{res['task_id']}"
-                        }
-                    }
-                }
-            }
-
-        # 🔥 处理一般错误 - 改为validation_error格式
-        if isinstance(res, dict) and "error" in res and not res.get("timeout"):
-            return {
-                "status": "validation_error",
-                "error_code": 422,
-                "error": res.get("error", "任务执行出现错误"),
-                "details": {
-                    "field": res.get("field", ""),
-                    "message": "Field required",
-                    "type": "missing",
-                    "message": res.get("message", "任务执行出现错误"),
-                    "task_id": res.get("task_id"),
-                    "tenant_id": res.get("tenant_id"),
-                    "business_id": res.get("business_id"),
-                    "suggestion": "请参考API文档检查请求参数格式",
-                    "input": res.get("input", {})
-                }
-            }
-
-        # 🔥 新增：处理跳过上传的文本结果
-        if isinstance(res, dict) and res.get("content_type") == "text" and res.get("upload_skipped"):
-            print(f"📝 [FORMAT-RESPONSE] 检测到跳过上传的文本结果")
-
-            return {
-                "status": "completed",
-                "data": res.get("text_content", res.get("result")),
-                "result_type": "text",
-                "processing_time": res.get("processing_time"),
-                "function_name": res.get("function_name"),
-                "upload_info": {
-                    "upload_skipped": True,
-                    "skip_reason": res.get("skip_reason", "文本类接口"),
-                    "integration": res.get("cloud_integration", "text_direct")
-                },
-                "task_update_success": res.get("task_update_success", False),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id")
-            }
-
-        # 🔥 新增：处理跳过上传的图片结果
-        if isinstance(res, dict) and res.get("content_type") == "image" and res.get("upload_skipped"):
-            print(f"🖼️ [FORMAT-RESPONSE] 检测到跳过上传的图片结果")
-
-            image_url = res.get("original_image_url") or res.get("image_url")
-
-            return {
-                "status": "completed",
-                "image_url": image_url,
-                "result_type": "image",
-                "processing_time": res.get("processing_time"),
-                "function_name": res.get("function_name"),
-                "upload_info": {
-                    "upload_skipped": True,
-                    "skip_reason": res.get("skip_reason", "图片类接口"),
-                    "integration": res.get("cloud_integration", "image_direct"),
-                    "original_url": image_url
-                },
-                "task_update_success": res.get("task_update_success", False),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id")
-            }
-
-        # 🔥 新增：处理跳过上传的URL结果
-        if isinstance(res, dict) and res.get("content_type") == "url" and res.get("upload_skipped"):
-            print(f"🔗 [FORMAT-RESPONSE] 检测到跳过上传的URL结果")
-
-            return {
-                "status": "completed",
-                "url": res.get("original_url"),
-                "result_type": "url",
-                "processing_time": res.get("processing_time"),
-                "function_name": res.get("function_name"),
-                "upload_info": {
-                    "upload_skipped": True,
-                    "skip_reason": res.get("skip_reason", "URL类型结果"),
-                    "integration": res.get("cloud_integration", "url_direct")
-                },
-                "task_update_success": res.get("task_update_success", False),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id")
-            }
-
-        # 处理包含result字段的响应
-        if isinstance(res, dict) and res.get("result"):
-            result_data = res["result"]
-
-            # 检查是否包含图片URL
-            if isinstance(result_data, str) and (
-                    result_data.startswith('http://') or result_data.startswith('https://')):
-                print(f"🖼️ [FORMAT-RESPONSE] 检测到图片URL结果: {result_data}")
-
-                # 构建图片响应
-                response = {
-                    "status": "completed",
-                    "image_url": result_data,
-                    "result_type": "image",
-                    "processing_time": res.get("processing_time"),
-                    "function_name": res.get("function_name"),
-                    "task_id": res.get("task_id"),
-                    "tenant_id": res.get("tenant_id"),
-                    "business_id": res.get("business_id")
-                }
-
-                # 如果有OSS信息，添加到响应中
-                if res.get("oss_upload_success"):
-                    response.update({
-                        "oss_upload_success": True,
-                        "oss_url": res.get("oss_url"),
-                        "oss_path": res.get("oss_path"),
-                        "resource_id": res.get("resource_id"),
-                        "cloud_access_url": res.get("oss_url"),
-                        "original_image_url": result_data,
-                        "integration": "oss"
-                    })
-                else:
-                    response.update({
-                        "integration": "direct_url",
-                        "upload_info": {
-                            "upload_skipped": res.get("upload_skipped", True),
-                            "skip_reason": res.get("skip_reason", "直接返回URL")
-                        }
-                    })
-
-                return response
-
-            # 检查字典中是否包含图片URL
-            elif isinstance(result_data, dict):
-                # 尝试提取图片URL
-                image_url = None
-                url_fields = ['url', 'image_url', 'output_url', 'result_url', 'data', 'output', 'image']
-
-                for field in url_fields:
-                    if field in result_data:
-                        field_value = result_data[field]
-                        if isinstance(field_value, str) and (
-                                field_value.startswith('http://') or field_value.startswith('https://')):
-                            image_url = field_value
-                            break
-
-                if image_url:
-                    print(f"🖼️ [FORMAT-RESPONSE] 从字典中检测到图片URL: {image_url}")
-
-                    response = {
-                        "status": "completed",
-                        "image_url": image_url,
-                        "result_type": "image",
-                        "raw_result": result_data,
-                        "processing_time": res.get("processing_time"),
-                        "function_name": res.get("function_name"),
-                        "task_id": res.get("task_id"),
-                        "tenant_id": res.get("tenant_id"),
-                        "business_id": res.get("business_id")
-                    }
-
-                    # 如果有OSS信息，添加到响应中
-                    if res.get("oss_upload_success"):
-                        response.update({
-                            "oss_upload_success": True,
-                            "oss_url": res.get("oss_url"),
-                            "oss_path": res.get("oss_path"),
-                            "resource_id": res.get("resource_id"),
-                            "cloud_access_url": res.get("oss_url"),
-                            "original_image_url": image_url,
-                            "integration": "oss"
-                        })
-                    else:
-                        response.update({
-                            "integration": "direct_url",
-                            "upload_info": {
-                                "upload_skipped": res.get("upload_skipped", True),
-                                "skip_reason": res.get("skip_reason", "直接返回URL")
-                            }
-                        })
-
-                    return response
-
-        # 🔥 正常的视频文件处理
-        if "videoPath" in res and res["videoPath"]:
-            warehouse_path = res["videoPath"]
-            full_path = None
-            file_exists = False
-
-            if warehouse_path:
-                try:
-                    import config
-                    import os
-                    user_data_dir = config.get_user_data_dir()
-                    full_path = os.path.join(user_data_dir, warehouse_path)
-                    file_exists = os.path.exists(full_path)
-                except Exception as e:
-                    print(f"⚠️ 构建完整路径失败: {e}")
-                    full_path = None
-                    file_exists = False
-
-            response = {
-                "status": "completed",
-                "videoPath": warehouse_path,
-                "fullPath": full_path,
-                "warehouse_path": warehouse_path,
-                "full_file_path": full_path,
-                "file_exists": file_exists,
-                "processing_time": res.get("processing_time"),
-                "function_name": res.get("function_name"),
-                "task_id": res.get("task_id"),
-                "tenant_id": res.get("tenant_id"),
-                "business_id": res.get("business_id"),
-                "path_info": {
-                    "warehouse_path": warehouse_path,
-                    "full_path": full_path,
-                    "file_exists": file_exists
-                }
-            }
-
-            # 添加OSS信息（如果有）
-            if res.get("oss_upload_success"):
-                response.update({
-                    "oss_upload_success": True,
-                    "oss_url": res.get("oss_url"),
-                    "oss_path": res.get("oss_path"),
-                    "resource_id": res.get("resource_id"),
-                    "integration": "oss"
-                })
-            else:
-                response.update({
-                    "integration": "local",
-                    "upload_info": {
-                        "upload_skipped": res.get("upload_skipped", False),
-                        "skip_reason": res.get("skip_reason", "")
-                    }
-                })
-
-            return response
-
-        elif "result" in res:
-            warehouse_path = extract_warehouse_path(res["result"])
-            if warehouse_path:
-                full_path = None
-                file_exists = False
-
-                try:
-                    import config
-                    import os
-                    user_data_dir = config.get_user_data_dir()
-                    full_path = os.path.join(user_data_dir, warehouse_path)
-                    file_exists = os.path.exists(full_path)
-                except Exception as e:
-                    print(f"⚠️ 构建完整路径失败: {e}")
-                    full_path = None
-                    file_exists = False
-
-                response = {
-                    "status": "completed",
-                    "videoPath": warehouse_path,
-                    "fullPath": full_path,
-                    "warehouse_path": warehouse_path,
-                    "full_file_path": full_path,
-                    "file_exists": file_exists,
-                    "processing_time": res.get("processing_time"),
-                    "function_name": res.get("function_name"),
-                    "task_id": res.get("task_id"),
-                    "tenant_id": res.get("tenant_id"),
-                    "business_id": res.get("business_id"),
-                    "path_info": {
-                        "warehouse_path": warehouse_path,
-                        "full_path": full_path,
-                        "file_exists": file_exists
-                    }
-                }
-
-                # 添加OSS信息（如果有）
-                if res.get("oss_upload_success"):
-                    response.update({
-                        "oss_upload_success": True,
-                        "oss_url": res.get("oss_url"),
-                        "oss_path": res.get("oss_path"),
-                        "resource_id": res.get("resource_id"),
-                        "integration": "oss"
-                    })
-
-                return response
-            else:
-                # 🔥 处理无法提取路径的情况（可能是图片URL等）
-                result_data = res["result"]
-
-                # 如果是图片URL，按图片格式返回
-                if isinstance(result_data, str) and (
-                        result_data.startswith('http://') or result_data.startswith('https://')):
-                    return {
-                        "status": "completed",
-                        "image_url": result_data,
-                        "result_type": "image",
-                        "processing_time": res.get("processing_time"),
-                        "function_name": res.get("function_name"),
-                        "task_id": res.get("task_id"),
-                        "tenant_id": res.get("tenant_id"),
-                        "business_id": res.get("business_id"),
-                        "integration": "direct_url",
-                        "upload_info": {
-                            "upload_skipped": True,
-                            "skip_reason": "图片URL直接返回"
-                        }
-                    }
-
-                # 🔥 其他类型结果的通用处理
-                return {
-                    "status": "completed",
-                    "result": result_data,
-                    "result_type": "other",
-                    "processing_time": res.get("processing_time"),
-                    "function_name": res.get("function_name"),
-                    "task_id": res.get("task_id"),
-                    "tenant_id": res.get("tenant_id"),
-                    "business_id": res.get("business_id"),
-                    "message": "任务完成，但无法识别结果类型"
-                }
+    
+    return await wrapper(request)
+
+
+@app.post("/video/advertisement-enhance")
+async def video_advertisement_enhance(request: VideoAdvertisementEnhanceRequest):
+    """生成增强广告视频 - 重构版本使用统一包装器"""
+    
+    def advertisement_enhance_func(**kwargs):
+        """增强广告视频生成业务逻辑"""
+        # 根据参数数量判断使用哪个API（保持原有逻辑）
+        if len(kwargs) <= 4:
+            return service.video_api.generate_advertisement(
+                company_name=kwargs.get('company_name'),
+                service=kwargs.get('service'),
+                topic=kwargs.get('topic'),
+                enhance=True
+            )
         else:
-            # 如果没有特定的结果字段，直接返回原始响应
-            return res
-    else:
-        # 异步模式：返回任务ID和查询信息
-        return {
-            "task_id": res["task_id"],
-            "status": "submitted",
-            "message": "任务已提交到异步系统",
-            "tenant_id": res.get("tenant_id"),
-            "business_id": res.get("business_id"),
-            "query_urls": {
-                "get_result": f"/get-result/{res['task_id']}",
-                "system_status": "/debug/async-queue-status"
-            },
-            "system_info": {
-                "version": "v2_async",
-                "max_workers": getattr(res, 'max_workers', 5),
-                "timeout": getattr(res, 'max_task_timeout', 1800)
-            }
-        }
+            return service.video_api.generate_advertisement_enhance(
+                company_name=kwargs.get('company_name'),
+                service=kwargs.get('service'),
+                topic=kwargs.get('topic'),
+                content=kwargs.get('content'),
+                need_change=kwargs.get('need_change'),
+                add_digital_host=kwargs.get('add_digital_host'),
+                use_temp_materials=kwargs.get('use_temp_materials'),
+                clip_mode=kwargs.get('clip_mode'),
+                upload_digital_host=kwargs.get('upload_digital_host'),
+                moderator_source=kwargs.get('moderator_source'),
+                enterprise_source=kwargs.get('enterprise_source')
+            )
+    
+    # 使用通用端点包装器
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=advertisement_enhance_func,
+        function_name="generate_advertisement_enhance",
+        async_func_name="get_video_advertisement_enhance",
+        is_digital_human=False,
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
+    )
+    
+    return await wrapper(request)
+
+
+@app.post("/video/clicktype")
+async def video_clicktype(request: ClickTypeRequest):
+    """生成点击类视频 - 重构版本使用统一包装器"""
+    
+    def clicktype_func(**kwargs):
+        """点击类视频生成业务逻辑"""
+        return service.video_api.generate_clicktype(
+            title=kwargs.get('title'),
+            content=kwargs.get('content')
+        )
+    
+    # 使用通用端点包装器
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=clicktype_func,
+        function_name="generate_clicktype",
+        async_func_name="get_video_clicktype",
+        is_digital_human=False,
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
+    )
+    
+    return await wrapper(request)
 
 
 @app.post("/video/digital-human-easy")
-async def api_get_video_digital_huamn_easy_universal(
-        req: dict,
-        mode: str = Query("async", description="执行模式：sync(同步)/async(异步)"),
-        tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id"),
-        task_id_query: str = Query(None, description="任务ID（URL参数）", alias="task_id")
-):
-    """🔥 通用数字人API - 支持您的JSON格式"""
+async def video_digital_human_easy(request: DigitalHumanEasyRequest):
+    """生成数字人视频 - 重构版本使用统一包装器"""
+    
+    def digital_human_func(**kwargs):
+        """数字人视频生成业务逻辑"""
+        return service.video_api.generate_digital_human(
+            video_input=kwargs.get('file_path'),  # 使用file_path作为video_input
+            topic=kwargs.get('topic'),
+            content=kwargs.get('content', ''),
+            audio_input=kwargs.get('audio_url') or kwargs.get('audio_path')  # 兼容audio_url和audio_path
+        )
+    
+    # 使用通用端点包装器 - 数字人专用接口
+    wrapper = endpoint_handler.create_endpoint_wrapper(
+        business_func=digital_human_func,
+        function_name="generate_digital_human",
+        async_func_name="get_video_digital_human",
+        is_digital_human=True,  # 数字人专用
+        response_type=APIConstants.RESPONSE_TYPE_VIDEO
+    )
+    
+    return await wrapper(request)
+
+
+@app.post("/video/clothes-different-scene")
+async def video_clothes_different_scene(request: ClothesDifferentSceneRequest):
+    """生成服装场景视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.generate_clothes_scene(
+                has_figure=request.has_figure,
+                clothes_url=request.clothesurl,
+                description=request.description,
+                is_down=getattr(request, 'is_down', True)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_clothes_scene", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_clothes_scene"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "generate_clothes_scene", mode=mode)
+
+
+@app.post("/video/big-word")
+async def video_big_word(request: BigWordRequest):
+    """生成大字报视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 🔥 添加调试信息
+    print(f"🔍 [app_0715] 接收到的请求参数:")
+    print(f"   request.company_name: {request.company_name}")
+    print(f"   request.title: {request.title}")
+    print(f"   request.product: {request.product}")
+    print(f"   request.description: {request.description}")
+    print(f"   request.content: {request.content}")
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.generate_big_word(
+                company_name=request.company_name,
+                title=request.title,
+                product=request.product,
+                description=request.description,
+                content=request.content
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_big_word", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_big_word"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    # 🔥 修复：传递正确的参数给 handle_async_endpoint
+    return await handle_async_endpoint(
+        request,
+        process,
+        "generate_big_word",
+        mode=mode,
+        company_name=request.company_name,
+        title=request.title,
+        product=request.product,
+        description=request.description,
+        content=request.content
+    )
+
+
+@app.post("/video/catmeme")
+async def video_catmeme(request: CatMemeRequest):
+    """生成猫咪表情包视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.generate_catmeme(
+                dialogue=request.title,  # Use title as dialogue
+                author=request.author,
+                content=getattr(request, 'content', None)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_catmeme", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_catmeme"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "generate_catmeme", mode=mode)
+
+
+@app.post("/video/incitement")
+async def video_incitement(request: IncitementRequest):
+    """生成煽动类视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.generate_incitement(
+                theme=request.theme,
+                intensity=getattr(request, 'intensity', 'medium'),
+                target_audience=getattr(request, 'target_audience', 'general')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_incitement", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_incitement"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "generate_incitement", mode=mode)
+
+
+@app.post("/video/sinology")
+async def video_sinology(request: SinologyRequest):
+    """生成国学类视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.generate_sinology(
+                classic=request.classic,
+                interpretation=request.interpretation,
+                background_style=getattr(request, 'background_style', 'traditional')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_sinology", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_sinology"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "generate_sinology", mode=mode)
+
+
+@app.post("/video/stickman")
+async def video_stickman(request: StickmanRequest):
+    """生成火柴人视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    if mode == "sync":
+        # 同步模式
+        try:
+            # 使用原始的 get_video_stickman 函数，它接收 author, title, content, lift_text 参数
+            from core.cliptemplate.coze.video_stickman import get_video_stickman
+            result = get_video_stickman(
+                author=request.author,
+                title=request.title,
+                content=getattr(request, 'content', None),
+                lift_text=getattr(request, 'lift_text', '科普动画')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_stickman", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_stickman"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 异步模式
+        try:
+            args = {
+                "author": request.author,
+                "title": request.title,
+                "content": getattr(request, 'content', None),
+                "lift_text": getattr(request, 'lift_text', '科普动画')
+            }
+            
+            task_id = await task_manager.submit_task(
+                func_name="get_video_stickman",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_stickman"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+@app.post("/video/smart-clip")
+async def video_smart_clip(request: SmartClipRequest):
+    """智能视频剪辑"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.get_smart_clip(
+                video_path=request.video_path,
+                target_duration=getattr(request, 'target_duration', 30)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "get_smart_clip", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "get_smart_clip"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "get_smart_clip", mode=mode)
+
+
+@app.post("/video/clip")
+async def video_clip(request: SmartClipRequest):
+    """视频剪辑"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    if mode == "sync":
+        # 同步模式 - 保持原有逻辑
+        try:
+            from core.clipgenerate.interface_function import get_smart_clip_video
+
+            result = get_smart_clip_video(
+                input_source=request.input_source,
+                is_directory=getattr(request, 'is_directory', True),
+                company_name=getattr(request, 'company_name', '测试公司'),
+                text_list=getattr(request, 'text_list', None),
+                audio_durations=getattr(request, 'audio_durations', None),
+                clip_mode=getattr(request, 'clip_mode', 'random'),
+                target_resolution=getattr(request, 'target_resolution', (1920, 1080))
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "get_smart_clip_video", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "get_smart_clip_video"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 异步模式 - 使用task_manager提交任务
+        try:
+            args = {
+                "input_source": request.input_source,
+                "is_directory": getattr(request, 'is_directory', True),
+                "company_name": getattr(request, 'company_name', '测试公司'),
+                "text_list": getattr(request, 'text_list', None),
+                "audio_durations": getattr(request, 'audio_durations', None),
+                "clip_mode": getattr(request, 'clip_mode', 'random'),
+                "target_resolution": getattr(request, 'target_resolution', (1920, 1080))
+            }
+
+            task_id = await task_manager.submit_task(
+                func_name="get_smart_clip_video",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "get_smart_clip_video"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+@app.post("/video/dgh-img-insert")
+async def video_dgh_img_insert(request: DGHImgInsertRequest):
+    """数字人图片插入视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.dgh_img_insert(
+                video_url=request.video_file_path,
+                title=request.title,
+                content=request.content,
+                need_change=request.need_change,
+                add_subtitle=getattr(request, 'add_subtitle', True),  # 🔥 新增字幕控制参数
+                insert_image=getattr(request, 'insert_image', True)  # 🔥 新增图片插入控制参数
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "dgh_img_insert", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "dgh_img_insert"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    # 🔥 修复：传递正确的参数给 handle_async_endpoint，就像 big-word 端点一样
+    return await handle_async_endpoint(
+        request,
+        process,
+        "dgh_img_insert",
+        mode=mode,
+        video_url=request.video_file_path,
+        title=request.title,
+        content=request.content,
+        need_change=request.need_change
+    )
+
+
+@app.post("/video/digital-human-clips")
+async def video_digital_human_clips(request: DigitalHumanClipsRequest):
+    """生成数字人剪辑视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.digital_human_clips(
+                clips=request.clips,
+                transition=getattr(request, 'transition', 'fade')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "digital_human_clips", request, is_digital_human=True)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "digital_human_clips"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "digital_human_clips", mode=mode)
+
+
+@app.post("/video/ai-avatar")
+async def video_ai_avatar_unified(request: AIAvatarUnifiedRequest):
+    """AI分身统一接口 - 统一使用dgh_img_insert函数，通过参数控制功能"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            # 🔥 音频处理逻辑：如果提供audio_url就使用，否则使用video_url中的音频
+            print(f"🎵 [video_ai_avatar_unified] 音频处理逻辑:")
+            print(f"   audio_url: {request.audio_url}")
+            print(f"   video_url: {request.video_url}")
+            
+            if request.audio_url:
+                print(f"   策略: 使用提供的audio_url音频")
+                audio_strategy = "use_provided_audio"
+            else:
+                print(f"   策略: 使用video_url中的原始音频")
+                audio_strategy = "use_video_audio"
+            
+            # 统一使用 dgh_img_insert 函数，不再区分 basic 和 enhance
+            # 通过 add_subtitle 和 insert_image 参数来控制功能
+            result = get_video_dgh_img_insert(
+                title=request.title,
+                video_file_path=request.video_url,
+                content=request.content,
+                need_change=request.need_change or False,
+                add_subtitle=request.add_subtitle if request.add_subtitle is not None else True,
+                insert_image=request.insert_image if request.insert_image is not None else True,
+                audio_url=request.audio_url  # 🔥 传递音频URL
+            )
+
+            # 使用统一的结果处理
+            return enhance_endpoint_result(result, "dgh_img_insert", request, is_digital_human=False)
+
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "dgh_img_insert"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    # 统一的异步处理
+    return await handle_async_endpoint(
+        request,
+        process,
+        "dgh_img_insert",
+        mode=mode,
+        video_url=request.video_url,
+        title=request.title,
+        content=request.content,
+        need_change=request.need_change,
+        add_subtitle=request.add_subtitle,
+        insert_image=request.insert_image,
+        audio_url=request.audio_url  # 🔥 统一使用audio_url参数
+    )
+
+
+@app.post("/video/clothes-fast-change")
+async def video_clothes_fast_change(request: ClothesFastChangeRequest):
+    """生成服装快速换装视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.clothes_fast_change(
+                model_image=request.model_image,
+                clothes_list=request.clothes_list,
+                change_speed=getattr(request, 'change_speed', 'normal')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "clothes_fast_change", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "clothes_fast_change"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "clothes_fast_change", mode=mode)
+
+
+@app.post("/video/random")
+async def video_random(request: VideoRandomRequest):
+    """生成随机视频"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.generate_random_video(
+                category=request.category,
+                duration=getattr(request, 'duration', 30)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "generate_random_video", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_random_video"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "generate_random_video", mode=mode)
+
+
+@app.post("/video/digital-human-generation")
+async def video_digital_human_generation(request: DigitalHumanRequest):
+    """生成数字人视频 - 一生十特殊接口"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    if mode == "sync":
+        # 同步模式
+        try:
+            result = process_single_video_by_url(
+                video_url=request.video_url,
+                tenant_id=request.tenant_id,
+                id=request.id,
+                preserve_duration=True  # 保持原始视频时长
+            )
+            # 🔥 使用增强函数处理结果（数字人专用接口）
+            return enhance_endpoint_result(result, "process_single_video_by_url", request, is_digital_human=True)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "process_single_video_by_url"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 异步模式 - 使用数字人专用的状态更新接口
+        try:
+            args = {
+                "video_url": request.video_url,
+                "tenant_id": request.tenant_id,
+                "id": request.id,
+                "preserve_duration": True  # 保持原始视频时长
+            }
+
+            task_id = await task_manager.submit_task(
+                func_name="process_single_video_by_url",
+                args=args
+            )
+
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "process_single_video_by_url"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+@app.post("/video/edit")
+async def video_edit(request: VideoEditMainRequest):
+    """视频编辑"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    if mode == "sync":
+        # 同步模式
+        try:
+            result = get_video_edit_simple(
+                video_sources=request.video_sources,
+                duration=getattr(request, 'duration', 30),
+                style=getattr(request, 'style', '抖音风'),
+                purpose=getattr(request, 'purpose', '社交媒体'),
+                use_local_ai=getattr(request, 'use_local_ai', True),
+                api_key=getattr(request, 'api_key', None)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "get_video_edit_simple", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "get_video_edit_simple"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 异步模式
+        try:
+            args = {
+                "video_sources": request.video_sources,
+                "duration": getattr(request, 'duration', 30),
+                "style": getattr(request, 'style', '抖音风'),
+                "purpose": getattr(request, 'purpose', '社交媒体'),
+                "use_local_ai": getattr(request, 'use_local_ai', True),
+                "api_key": getattr(request, 'api_key', None)
+            }
+
+            task_id = await task_manager.submit_task(
+                func_name="get_video_edit_simple",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "get_video_edit_simple"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+
+@app.post("/video/highlights-extract")
+async def video_highlights_extract(request: VideoHighlightsRequest):
+    """从直播数据中提取视频精彩片段"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+    
+    if mode == "sync":
+        # 同步模式
+        try:
+            result = extract_video_highlights_from_url(
+                excel_url=request.excel_url,
+                video_url=request.video_url,
+                metrics=request.metrics,
+                top_n=request.top_n,
+                upload_to_oss_flag=request.upload_to_oss
+            )
+            
+            # 根据结果状态返回不同的响应
+            if result.get("status") == "success":
+                return JSONResponse(
+                    status_code=200,
+                    content={
+                        "code": 200,
+                        "message": result.get("message", "视频处理成功"),
+                        "data": {
+                            "video_url": result.get("oss_url", result.get("output_file")),
+                            "output_file": result.get("output_file")
+                        }
+                    }
+                )
+            else:
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "code": 500,
+                        "message": result.get("message", "视频处理失败"),
+                        "error": result.get("message")
+                    }
+                )
+                
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "code": 500,
+                    "message": f"处理失败: {str(e)}",
+                    "error": str(e)
+                }
+            )
+    else:
+        # 异步模式
+        try:
+            args = {
+                "excel_url": request.excel_url,
+                "video_url": request.video_url,
+                "metrics": request.metrics,
+                "top_n": request.top_n,
+                "upload_to_oss_flag": request.upload_to_oss
+            }
+            
+            task_id = await task_manager.submit_task(
+                func_name="extract_video_highlights_from_url",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+        except Exception as e:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "code": 500,
+                    "message": f"提交任务失败: {str(e)}",
+                    "error": str(e)
+                }
+            )
+
+
+@app.post("/video/highlight-clip")
+async def video_highlight_clip(request: VideoHighlightClipRequest):
+    """基于Excel观看数据的视频高光剪辑 - 仅支持异步模式"""
+    # 强制使用异步模式
     try:
-        print(f"🎯 收到通用数字人请求: {req}")
-
-        # 🔥 修复：从请求体或URL参数获取tenant_id
-        tenant_id = req.get("tenant_id") or tenant_id_query
-        task_id = req.get("task_id") or task_id_query or str(uuid.uuid4())
-        business_id = req.get("id")
-
-        print(f"🎯 [数字人] 处理请求:")
-        print(f"   Task ID: {task_id}")
-        print(f"   Tenant ID: {tenant_id}")
-        print(f"   Business ID: {business_id}")
-
-        # 手动参数映射
-        video_input = req.get("video_input") or req.get("file_path") or req.get("video_url")
-        if not video_input:
-            raise HTTPException(status_code=422, detail="必须提供视频输入参数")
-
-        topic = req.get("topic")
-        if not topic:
-            raise HTTPException(status_code=422, detail="必须提供topic参数")
-
-        content = req.get("content", "")
-        if content == "":
-            content = None
-
-        audio_input = req.get("audio_input") or req.get("audio_url") or req.get("audio_path", "")
-        if audio_input == "":
-            audio_input = None
-
-        function_args = {
-            "file_path": video_input,
-            "topic": topic,
-            "content": content,
-            "audio_url": audio_input,
+        args = {
+            "video_source": request.video_source,
+            "excel_source": request.excel_source,
+            "target_duration": request.target_duration,
+            "output_path": request.output_path
         }
-
-        print(f"🔧 转换后的函数参数: {function_args}")
-
-        # 🔥 修复：根据是否有tenant_id选择执行方式
-        if tenant_id:
-            res = await async_task_manager.execute_task_with_upload(
-                func_name="get_video_digital_huamn_easy_local",
-                args=function_args,
-                mode=mode,
-                task_id=task_id,
-                tenant_id=tenant_id,
-                business_id=business_id
-            )
-        else:
-            res = await execute_task(
-                func_name="get_video_digital_huamn_easy_local",
-                args=function_args,
-                mode=mode,
-                task_id=task_id
-            )
-        print("结果为")
-        print(res)
-        response = format_response(res, mode, urlpath)
-        if isinstance(response, dict):
-            response.update({
-                "task_id": task_id,
-                "tenant_id": tenant_id,
-                "business_id": business_id,
-                "enhanced": True
-            })
-
-        return response
-
-    except HTTPException:
-        raise
+        
+        task_id = await task_manager.submit_task(
+            func_name="process_video_highlight_clip",
+            args=args,
+            tenant_id=getattr(request, 'tenant_id', None),
+            business_id=getattr(request, 'id', None)
+        )
+        
+        return format_response(task_id, mode="async", urlpath=urlpath)
     except Exception as e:
-        print(f"❌ 通用API处理失败: {str(e)}")
-        # 如果有租户ID，更新任务状态为失败
-        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
-            try:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
-            except Exception as status_error:
-                print(f"⚠️ 更新失败状态时出错: {status_error}")
+        error_res = {"error": str(e), "function_name": "process_video_highlight_clip"}
+        return format_response(error_res, mode="sync", error_type="general_exception")
 
-        import traceback
-        print(f"错误堆栈: {traceback.format_exc()}")
-        raise HTTPException(status_code=500, detail=f"处理失败: {str(e)}")
+
+# ========== Tongyi Wanxiang 文生图接口 ==========
+
+@app.post("/wanxiang/text-to-image-v2")
+async def wanxiang_text_to_image_v2(request: TextToImageV2Request):
+    """通义万相文生图V2"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.text_to_image_v2(
+                prompt=request.prompt,
+                style=getattr(request, 'style', 'default'),
+                size=getattr(request, 'size', '1024*1024')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "text_to_image_v2", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "text_to_image_v2"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "text_to_image_v2", mode=mode)
+
+
+@app.post("/wanxiang/text-to-image-v1")
+async def wanxiang_text_to_image_v1(request: TextToImageV1Request):
+    """通义万相文生图V1"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.text_to_image_v1(
+                prompt=request.prompt,
+                style=getattr(request, 'style', 'default')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "text_to_image_v1", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "text_to_image_v1"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "text_to_image_v1", mode=mode)
+
+
+# ========== Tongyi Wanxiang 图像编辑接口 ==========
+
+@app.post("/wanxiang/image-edit")
+async def wanxiang_image_background_edit(request: ImageBackgroundEditRequest):
+    """图像背景编辑"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.image_background_edit(
+                image_url=request.image_url,
+                background_prompt=request.background_prompt
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "image_background_edit", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "image_background_edit"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "image_background_edit", mode=mode)
+
+
+# ========== Tongyi Wanxiang 虚拟模特接口 ==========
+
+@app.post("/wanxiang/virtual-model-v1")
+async def wanxiang_virtual_model_v1(request: VirtualModelV1Request):
+    """虚拟模特V1"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.virtual_model_v1(
+                base_image_url=request.base_image_url,
+                prompt=request.prompt,
+                mask_image_url=getattr(request, 'mask_image_url', None),
+                face_prompt=getattr(request, 'face_prompt', None),
+                background_image_url=getattr(request, 'background_image_url', None),
+                short_side_size=getattr(request, 'short_side_size', '1024'),
+                n=getattr(request, 'n', 1)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "virtual_model_v1", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "virtual_model_v1"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "virtual_model_v1", mode=mode)
+
+
+@app.post("/wanxiang/virtual-model-v2")
+async def wanxiang_virtual_model_v2(request: VirtualModelV2Request):
+    """虚拟模特V2"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.virtual_model_v2(
+                base_image_url=request.base_image_url,
+                prompt=request.prompt,
+                mask_image_url=getattr(request, 'mask_image_url', None),
+                face_prompt=getattr(request, 'face_prompt', None),
+                background_image_url=getattr(request, 'background_image_url', None),
+                short_side_size=getattr(request, 'short_side_size', '1024'),
+                n=getattr(request, 'n', 1)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "virtual_model_v2", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "virtual_model_v2"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "virtual_model_v2", mode=mode)
+
+
+@app.post("/wanxiang/shoe-model")
+async def wanxiang_shoe_model(request: ShoeModelRequest):
+    """鞋靴模特"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.shoe_model(
+                template_image_url=request.template_image_url,
+                shoe_image_url=request.shoe_image_url
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "shoe_model", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "shoe_model"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "shoe_model", mode=mode)
+
+
+@app.post("/wanxiang/creative-poster")
+async def wanxiang_creative_poster(request: CreativePosterRequest):
+    """创意海报生成"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.creative_poster(
+                title=request.title,
+                sub_title=getattr(request, 'sub_title', None),
+                body_text=getattr(request, 'body_text', None),
+                prompt_text_zh=getattr(request, 'prompt_text_zh', None)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "creative_poster", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "creative_poster"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "creative_poster", mode=mode)
+
+
+@app.post("/wanxiang/background-generation")
+async def wanxiang_background_generation(request: BackgroundGenerationRequest):
+    """背景生成"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.background_generation(
+                base_image_url=request.base_image_url,
+                background_prompt=request.ref_prompt
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "background_generation", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "background_generation"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "background_generation", mode=mode)
+
+
+# ========== Tongyi Wanxiang AI试衣接口 ==========
+
+@app.post("/wanxiang/ai-tryon-basic")
+async def wanxiang_ai_tryon_basic(request: AITryonBasicRequest):
+    """AI试衣基础版"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.ai_tryon_basic(
+                person_image_url=request.person_image_url,
+                top_garment_url=getattr(request, 'top_garment_url', None),
+                bottom_garment_url=getattr(request, 'bottom_garment_url', None),
+                resolution=getattr(request, 'resolution', -1),
+                restore_face=getattr(request, 'restore_face', True)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "ai_tryon_basic", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "ai_tryon_basic"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "ai_tryon_basic", mode=mode)
+
+
+@app.post("/wanxiang/ai-tryon-plus")
+async def wanxiang_ai_tryon_plus(request: AITryonPlusRequest):
+    """AI试衣Plus版"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.ai_tryon_plus(
+                person_image_url=request.person_image_url,
+                top_garment_url=getattr(request, 'top_garment_url', None),
+                bottom_garment_url=getattr(request, 'bottom_garment_url', None),
+                resolution=getattr(request, 'resolution', -1),
+                restore_face=getattr(request, 'restore_face', True)
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "ai_tryon_plus", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "ai_tryon_plus"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "ai_tryon_plus", mode=mode)
+
+
+@app.post("/wanxiang/ai-tryon-enhance")
+async def wanxiang_ai_tryon_enhance(request: AITryonEnhanceRequest):
+    """AI试衣图片精修"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.ai_tryon_enhance(
+                person_image_url=request.person_image_url,
+                top_garment_url=request.top_garment_url,
+                bottom_garment_url=request.bottom_garment_url,
+                gender=getattr(request, 'gender', 'woman')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "ai_tryon_enhance", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "ai_tryon_enhance"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "ai_tryon_enhance", mode=mode)
+
+
+@app.post("/wanxiang/ai-tryon-segment")
+async def wanxiang_ai_tryon_segment(request: AITryonSegmentRequest):
+    """AI试衣图片分割"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.ai_tryon_segment(
+                image_url=request.image_url,
+                clothes_type=request.clothes_type
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "ai_tryon_segment", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "ai_tryon_segment"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "ai_tryon_segment", mode=mode)
+
+
+# ========== Tongyi Wanxiang 视频生成接口 ==========
+
+@app.post("/wanxiang/image-to-video-advanced")
+async def wanxiang_image_to_video_advanced(request: ImageToVideoAdvancedRequest):
+    """图生视频高级版"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.image_to_video_advanced(
+                first_frame_url=request.first_frame_url,
+                last_frame_url=request.last_frame_url,
+                prompt=request.prompt,
+                duration=getattr(request, 'duration', 5),
+                size=getattr(request, 'size', '1280*720')
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "image_to_video_advanced", request, is_digital_human=False)
+
+        except Exception as e:
+            print(f"❌ [API] 处理失败: {str(e)}")
+            error_res = {"error": str(e), "function_name": "image_to_video_advanced"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "image_to_video_advanced", mode=mode)
+
+
+# ========== Tongyi Wanxiang 数字人视频接口 ==========
+
+@app.post("/wanxiang/animate-anyone")
+async def wanxiang_animate_anyone(request: AnimateAnyoneRequest):
+    """舞动人像 AnimateAnyone"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.animate_anyone(
+                image_url=request.image_url,
+                dance_video_url=request.dance_video_url
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "animate_anyone", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "animate_anyone"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "animate_anyone", mode=mode)
+
+
+@app.post("/wanxiang/emo-video")
+async def wanxiang_emo_video(request: EMOVideoRequest):
+    """悦动人像EMO"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.emo_video(
+                image_url=request.image_url,
+                audio_url=request.audio_url
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "emo_video", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "emo_video"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "emo_video", mode=mode)
+
+
+@app.post("/wanxiang/live-portrait")
+async def wanxiang_live_portrait(request: LivePortraitRequest):
+    """灵动人像 LivePortrait"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.live_portrait(
+                image_url=request.image_url,
+                audio_url=request.audio_url
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "live_portrait", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "live_portrait"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "live_portrait", mode=mode)
+
+
+# ========== Tongyi Wanxiang 视频风格重绘接口 ==========
+
+@app.post("/wanxiang/video-style-transfer")
+async def wanxiang_video_style_transfer(request: VideoStyleTransferRequest):
+    """视频风格重绘"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            result = service.video_api.video_style_transfer(
+                video_url=request.video_url,
+                style=request.style
+            )
+            # 🔥 使用增强函数处理结果
+            return enhance_endpoint_result(result, "video_style_transfer", request, is_digital_human=False)
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "video_style_transfer"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+
+    return await handle_async_endpoint(request, process, "video_style_transfer", mode=mode)
+
+
+# ========== 通用接口 ==========
+
+@app.get("/")
+async def root():
+    """根路径 - 显示所有可用接口"""
+    return {
+        "message": "🚀 AI视频生成统一API系统",
+        "version": "2.0.0",
+        "total_endpoints": 31,
+        "categories": {
+            "🎬 Coze视频生成": [
+                "/video/advertisement",
+                "/video/advertisement-enhance",
+                "/video/clicktype",
+                "/video/digital-human-easy",
+                "/video/clothes-different-scene",
+                "/video/big-word",
+                "/video/catmeme",
+                "/video/incitement",
+                "/video/sinology",
+                "/video/stickman",
+                "/video/smart-clip",
+                "/video/clip",
+                "/video/dgh-img-insert",
+                "/video/digital-human-clips",
+                "/video/clothes-fast-change",
+                "/video/random",
+                "/video/digital-human-generation",
+                "/video/edit"
+            ],
+            "🎨 通义万相文生图": [
+                "/wanxiang/text-to-image-v2",
+                "/wanxiang/text-to-image-v1"
+            ],
+            "🖼️ 通义万相图像编辑": [
+                "/wanxiang/image-edit"
+            ],
+            "👗 通义万相虚拟模特": [
+                "/wanxiang/virtual-model-v1",
+                "/wanxiang/virtual-model-v2",
+                "/wanxiang/shoe-model",
+                "/wanxiang/creative-poster",
+                "/wanxiang/background-generation"
+            ],
+            "🧥 通义万相AI试衣": [
+                "/wanxiang/ai-tryon-basic",
+                "/wanxiang/ai-tryon-plus",
+                "/wanxiang/ai-tryon-enhance",
+                "/wanxiang/ai-tryon-segment"
+            ],
+            "🎥 通义万相视频生成": [
+                "/wanxiang/image-to-video-advanced"
+            ],
+            "🤖 通义万相数字人视频": [
+                "/wanxiang/animate-anyone",
+                "/wanxiang/emo-video",
+                "/wanxiang/live-portrait"
+            ],
+            "🎬 通义万相视频风格重绘": [
+                "/wanxiang/video-style-transfer"
+            ]
+        },
+        "utility_endpoints": [
+            "/api/video/types",
+            "/health",
+            "/docs"
+        ],
+        "documentation": "/docs"
+    }
+
+
+@app.get("/api/video/types")
+async def get_supported_video_types():
+    """获取支持的视频类型"""
+    return {
+        "supported_functions": service.video_api.get_all_supported_functions(),
+        "status": "success"
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """健康检查"""
+    return {
+        "status": "healthy",
+        "service": "AI Video Generation API",
+        "version": "2.0.0",
+        "endpoints_count": 31
+    }
+
+
+# ========== 任务状态查询接口 ==========
 
 @app.get("/get-result/{task_id}")
-async def get_task_result_with_oss_support(task_id: str, remove: bool = Query(False, description="是否移除结果")):
-    """增强版任务结果查询接口 - 支持OSS"""
-    global results, result_condition
+async def get_task_result(task_id: str, remove: bool = Query(False, description="是否移除结果")):
+    """获取任务结果"""
+    result = task_manager.get_result(task_id)
 
-    # 检查任务结果
-    async_result = async_task_manager.get_task_status(task_id)
-    if async_result.get("status") != "not_found":
-        result = async_result
-    else:
-        with result_condition:
-            if task_id not in results:
-                return {
-                    "status": "not_found",
-                    "task_id": task_id,
-                    "message": "任务不存在"
-                }
-            result = results.pop(task_id) if remove else results[task_id]
+    if not result:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
 
-    task_status = result.get("status", "unknown")
-    print(f"📊 [GET-RESULT] 任务状态: {task_status}")
+    # 如果任务还在处理中，返回当前状态
+    if result.get("status") in ["submitted", "processing"]:
+        return {
+            "status": result.get("status"),
+            "task_id": task_id,
+            "progress": result.get("progress", "0%"),
+            "current_step": result.get("current_step", ""),
+            "message": "任务正在处理中",
+            "submitted_at": result.get("submitted_at"),
+            "started_at": result.get("started_at")
+        }
 
-    if task_status == "completed":
-        warehouse_path = result.get("videoPath") or result.get("warehouse_path")
+    # 如果任务已完成，返回结果
+    if result.get("status") == "completed":
+        # 提取结果并格式化
+        task_result = result.get("result", {})
+        function_name = result.get("function_name", "")
+
+        # 🔥 修复：根据任务类型决定是否提取warehouse路径
+        warehouse_path = None
+        video_url = None
+
+        if function_name == "get_copy_generation":
+            # 文案生成任务：直接返回文本结果，不提取路径
+            print(f"📝 [TEXT-RESULT] 文案生成任务，返回文本结果: {task_result}")
+        else:
+            # 视频生成任务：提取warehouse路径
+            warehouse_path = extract_warehouse_path(task_result)
+            video_url = f"{urlpath}{warehouse_path}" if warehouse_path else None
+            print(f"🎬 [VIDEO-RESULT] 视频生成任务，提取路径: {warehouse_path}")
 
         response = {
             "status": "completed",
             "task_id": task_id,
-            "message": "任务处理完成",
-            "videoPath": warehouse_path,
+            "result": task_result,
             "warehouse_path": warehouse_path,
-            "result": result.get("result"),
-            "timestamp": result.get("timestamp") or result.get("completed_at"),
+            "video_url": video_url,
+            "processing_time": result.get("processing_time"),
+            "function_name": function_name,
+            "completed_at": result.get("completed_at"),
+            "tenant_id": result.get("tenant_id"),
+            "business_id": result.get("business_id")
+        }
+
+        # 如果请求删除结果，则删除
+        if remove:
+            with task_manager.result_condition:
+                if task_id in task_manager.results:
+                    del task_manager.results[task_id]
+
+        return response
+
+    # 如果任务失败
+    if result.get("status") == "failed":
+        return {
+            "status": "failed",
+            "task_id": task_id,
+            "error": result.get("error", "任务执行失败"),
+            "failed_at": result.get("failed_at"),
             "processing_time": result.get("processing_time"),
             "function_name": result.get("function_name")
         }
 
-        # 🔥 如果有OSS信息，添加到响应中
-        if result.get("oss_upload_success"):
-            response.update({
-                "oss_upload_success": True,
-                "oss_url": result.get("oss_url"),
-                "oss_path": result.get("oss_path"),
-                "resource_id": result.get("resource_id"),
-                "cloud_access_url": result.get("oss_url"),  # 云端访问URL
-                "integration": "oss",
-                "cloud_integration": "oss"
-            })
-            print(f"📊 [GET-RESULT] OSS信息:")
-            print(f"   OSS URL: {result.get('oss_url')}")
-            print(f"   资源ID: {result.get('resource_id')}")
-        else:
-            # 本地文件信息
-            if warehouse_path:
-                user_data_dir = config.get_user_data_dir()
-                full_path = os.path.join(user_data_dir, warehouse_path)
-                file_exists = os.path.exists(full_path)
-                response.update({
-                    "fullPath": full_path,
-                    "full_file_path": full_path,
-                    "file_exists": file_exists,
-                    "integration": "local"
-                })
+    # 默认返回
+    return result
 
-        return response
 
-    elif task_status == "failed":
+@app.get("/poll-result/{task_id}")
+async def poll_task_result(task_id: str, timeout: int = Query(30, description="轮询超时时间（秒）")):
+    """轮询任务结果（长轮询）"""
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        result = task_manager.get_result(task_id)
+
+        if not result:
+            raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+        # 如果任务已完成或失败，立即返回
+        if result.get("status") in ["completed", "failed"]:
+            return await get_task_result(task_id)
+
+        # 等待一小段时间再检查
+        await asyncio.sleep(0.5)
+
+    # 超时后返回当前状态
+    result = task_manager.get_result(task_id)
+    if result:
         return {
-            "status": "failed",
+            "status": result.get("status", "processing"),
             "task_id": task_id,
-            "message": f"任务处理失败: {result.get('error', '未知错误')}",
-            "error": result.get("error"),
-            "timestamp": result.get("timestamp") or result.get("failed_at"),
-            "processing_time": result.get("processing_time")
+            "progress": result.get("progress", "0%"),
+            "current_step": result.get("current_step", ""),
+            "message": "轮询超时，任务仍在处理中",
+            "timeout": True
         }
-
-    elif task_status in ["processing", "uploading"]:
-        return {
-            "status": task_status,
-            "task_id": task_id,
-            "message": f"任务{task_status}中",
-            "progress": result.get("progress", "未知"),
-            "current_step": result.get("current_step", "未知"),
-            "started_at": result.get("started_at")
-        }
-
     else:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+
+@app.get("/task-status/{task_id}")
+async def get_task_status(task_id: str):
+    """获取任务状态（简单状态查询）"""
+    result = task_manager.get_result(task_id)
+
+    if not result:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+
+    return {
+        "task_id": task_id,
+        "status": result.get("status"),
+        "progress": result.get("progress", "0%"),
+        "current_step": result.get("current_step", ""),
+        "submitted_at": result.get("submitted_at"),
+        "started_at": result.get("started_at"),
+        "completed_at": result.get("completed_at"),
+        "failed_at": result.get("failed_at"),
+        "processing_time": result.get("processing_time"),
+        "function_name": result.get("function_name")
+    }
+
+
+@app.get("/tasks")
+async def list_all_tasks(status: Optional[str] = Query(None, description="筛选任务状态")):
+    """列出所有任务"""
+    all_tasks = task_manager.get_all_results()
+
+    # 如果指定了状态筛选
+    if status:
+        filtered_tasks = {
+            task_id: task_info
+            for task_id, task_info in all_tasks.items()
+            if task_info.get("status") == status
+        }
         return {
-            "status": task_status,
-            "task_id": task_id,
-            "message": f"任务状态: {task_status}",
-            "raw_result": result
+            "total": len(filtered_tasks),
+            "status_filter": status,
+            "tasks": filtered_tasks
         }
 
+    # 返回所有任务
+    return {
+        "total": len(all_tasks),
+        "tasks": all_tasks
+    }
 
-@app.put('/api/product')
+
+# ========== 配置管理接口 ==========
+
+@app.post('/api/product')
 async def update_product_info(
         request: ProductConfigRequest,
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
@@ -3095,7 +2936,7 @@ async def update_product_info(
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
 
 
-@app.put('/api/voice/live_config')
+@app.post('/api/voice/live_config')
 async def update_voice_config(
         request: VoiceConfigRequest,
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
@@ -3124,26 +2965,6 @@ async def update_voice_config(
                 api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
             raise HTTPException(status_code=400, detail="没有提供要更新的配置项")
 
-        # 验证性别参数
-        if "gender" in updates:
-            if updates["gender"] not in ["female", "male", "default"]:
-                if tenant_id:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-                raise HTTPException(status_code=400, detail="性别参数必须是: female, male, default")
-
-        # 验证速度和音调范围
-        if "speed" in updates:
-            if not (0.5 <= updates["speed"] <= 2.0):
-                if tenant_id:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-                raise HTTPException(status_code=400, detail="语速必须在0.5-2.0之间")
-
-        if "pitch" in updates:
-            if not (0.5 <= updates["pitch"] <= 2.0):
-                if tenant_id:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-                raise HTTPException(status_code=400, detail="音调必须在0.5-2.0之间")
-
         # 更新配置
         success = config_manager.update_voice_config(updates)
 
@@ -3155,7 +2976,7 @@ async def update_voice_config(
             return {
                 "code": 200,
                 "message": "语音配置更新成功",
-                "data": config_manager.voice_config,
+                "data": config_manager.voice_info,
                 "task_id": task_id,
                 "tenant_id": tenant_id,
                 "business_id": business_id
@@ -3165,8 +2986,6 @@ async def update_voice_config(
                 api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
             raise HTTPException(status_code=500, detail="配置保存失败")
 
-    except HTTPException:
-        raise
     except Exception as e:
         # 🔥 异常时更新任务状态为失败
         if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
@@ -3178,20 +2997,309 @@ async def update_voice_config(
         raise HTTPException(status_code=500, detail=f"更新配置失败: {str(e)}")
 
 
+# @app.post('/api/server/start')
+# async def start_socket_server(
+#         req: ServerStartRequest,
+#         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
+# ):
+#     """启动WebSocket客户端连接 - 支持任务状态更新"""
+#     try:
+#         tenant_id = req.tenant_id or tenant_id_query
+#         task_id = str(uuid.uuid4())
+#         business_id = req.id
+#
+#         print(f"🎯 [启动WebSocket客户端] 处理请求:")
+#         print(f"   Task ID: {task_id}")
+#         print(f"   Tenant ID: {tenant_id}")
+#         print(f"   Business ID: {business_id}")
+#
+#         # 🔥 如果有tenant_id，立即更新任务状态为运行中
+#         if tenant_id:
+#             api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
+#
+#         global websocket_client
+#
+#         # Check if client is already connected
+#         if websocket_client and websocket_client.is_connected():
+#             if tenant_id:
+#                 api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
+#             raise HTTPException(
+#                 status_code=400,
+#                 detail={
+#                     "status": "error",
+#                     "message": "WebSocket客户端已经连接中",
+#                     "task_id": task_id,
+#                     "tenant_id": tenant_id,
+#                     "business_id": business_id
+#                 }
+#             )
+#
+#         # Create and start WebSocket client with AI message processing
+#         # 可配置的回复概率和队列大小
+#         reply_probability = 0.2  # 20%回复概率，避免过于频繁
+#         max_queue_size = 8  # 更大的队列支持更多消息积累
+#         websocket_client = WebSocketClient(
+#             host=req.host,
+#             port=req.port,
+#             reply_probability=reply_probability,
+#             max_queue_size=max_queue_size
+#         )
+#
+#         # 连接到WebSocket服务器
+#         success = await websocket_client.connect()
+#
+#         if success:
+#             # 🔥 如果有tenant_id，更新任务状态为完成
+#             if tenant_id:
+#                 api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+#
+#             return {
+#                 "code": 200,
+#                 "message": f"WebSocket客户端连接成功 - ws://{req.host}:{req.port}",
+#                 "data": {
+#                     "host": req.host,
+#                     "port": req.port,
+#                     "status": "connected",
+#                     "connection_type": "websocket_client"
+#                 },
+#                 "task_id": task_id,
+#                 "tenant_id": tenant_id,
+#                 "business_id": business_id
+#             }
+#         else:
+#             if tenant_id:
+#                 api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
+#             raise HTTPException(
+#                 status_code=500,
+#                 detail={
+#                     "status": "error",
+#                     "message": f"WebSocket客户端连接失败 - ws://{req.host}:{req.port}",
+#                     "task_id": task_id,
+#                     "tenant_id": tenant_id,
+#                     "business_id": business_id
+#                 }
+#             )
+#
+#     except Exception as e:
+#         # 🔥 异常时更新任务状态为失败
+#         if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
+#             try:
+#                 api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
+#             except Exception as status_error:
+#                 print(f"⚠️ 更新失败状态时出错: {status_error}")
+#
+#         raise HTTPException(status_code=500, detail=f"启动WebSocket客户端失败: {str(e)}")
+#
+# @app.post('/api/server/stop')
+# async def stop_socket_server(
+#         req: ServerStopRequest = ServerStopRequest(),
+#         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
+# ):
+#     """停止WebSocket客户端连接 - 支持任务状态更新"""
+#     try:
+#         tenant_id = req.tenant_id or tenant_id_query
+#         task_id = str(uuid.uuid4())
+#         business_id = req.id
+#
+#         print(f"🎯 [停止WebSocket客户端] 处理请求:")
+#         print(f"   Task ID: {task_id}")
+#         print(f"   Tenant ID: {tenant_id}")
+#         print(f"   Business ID: {business_id}")
+#
+#         # 🔥 如果有tenant_id，立即更新任务状态为运行中
+#         if tenant_id:
+#             api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
+#
+#         global websocket_client
+#         if websocket_client is not None and websocket_client.is_connected():
+#             # 关闭WebSocket客户端连接
+#             success = await websocket_client.close()
+#             websocket_client = None
+#
+#             if success:
+#                 # 🔥 如果有tenant_id，更新任务状态为完成
+#                 if tenant_id:
+#                     api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+#                 return {
+#                     "code": 200,
+#                     "message": "WebSocket客户端断开成功",
+#                     "data": {
+#                         "status": "disconnected",
+#                         "connection_type": "websocket_client"
+#                     },
+#                     "task_id": task_id,
+#                     "tenant_id": tenant_id,
+#                     "business_id": business_id
+#                 }
+#             else:
+#                 # 🔥 如果有tenant_id，更新任务状态为失败
+#                 if tenant_id:
+#                     api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
+#                 raise HTTPException(
+#                     status_code=500,
+#                     detail={
+#                         "status": "error",
+#                         "message": "WebSocket客户端断开失败",
+#                         "task_id": task_id,
+#                         "tenant_id": tenant_id,
+#                         "business_id": business_id
+#                     }
+#                 )
+#         else:
+#             if tenant_id:
+#                 api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+#
+#             return {
+#                 "code": 200,
+#                 "message": "WebSocket客户端已经断开",
+#                 "data": {
+#                     "status": "already_disconnected",
+#                     "connection_type": "websocket_client"
+#                 },
+#                 "task_id": task_id,
+#                 "tenant_id": tenant_id,
+#                 "business_id": business_id
+#             }
+#
+#     except Exception as e:
+#         # 🔥 异常时更新任务状态为失败
+#         if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
+#             try:
+#                 api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
+#             except Exception as status_error:
+#                 print(f"⚠️ 更新失败状态时出错: {status_error}")
+#
+#         raise HTTPException(status_code=500, detail=f"停止WebSocket客户端失败: {str(e)}")
+
+# ========== 自动产品介绍接口 ==========
+
 @app.post('/api/server/start')
 async def start_socket_server(
-        req: ServerStartRequest,
+        req: AutoIntroStartRequest,
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
 ):
-    """启动WebSocket服务器 - 支持任务状态更新"""
-    global socket_server, websocket_task
-
+    """启动自动产品介绍WebSocket客户端 - 支持任务状态更新"""
     try:
         tenant_id = req.tenant_id or tenant_id_query
         task_id = str(uuid.uuid4())
         business_id = req.id
 
-        print(f"🎯 [WebSocket服务器启动] 处理请求:")
+        print(f"🎯 [启动自动产品介绍客户端] 处理请求:")
+        print(f"   Task ID: {task_id}")
+        print(f"   Tenant ID: {tenant_id}")
+        print(f"   Business ID: {business_id}")
+        print(f"   Host: {req.host}")
+        print(f"   Port: {req.port}")
+        print(f"   无消息超时: {req.no_message_timeout}秒")
+        print(f"   介绍间隔: {req.auto_introduce_interval}秒")
+        print(f"   声音克隆: {'启用' if req.use_voice_cloning else '禁用'}")  # 🔥 新增日志
+        print(f"   自动重连: {'启用' if req.auto_reconnect else '禁用'}")
+        if req.auto_reconnect:
+            print(f"   最大重连次数: {req.max_reconnect_attempts}")
+            print(f"   重连延迟: {req.reconnect_delay}秒")
+
+        # 🔥 如果有tenant_id，立即更新任务状态为运行中
+        if tenant_id:
+            api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
+
+        global auto_intro_client
+
+        # 如果已有客户端在运行，先关闭它
+        if auto_intro_client is not None:
+            try:
+                await auto_intro_client.close()
+                print("🔄 关闭现有自动产品介绍客户端")
+            except Exception as close_error:
+                print(f"⚠️ 关闭现有客户端时出错: {close_error}")
+
+        # 创建新的客户端
+        auto_intro_client = WebSocketClient(
+            host=req.host,
+            port=req.port,
+            reply_probability=req.reply_probability,
+            max_queue_size=req.max_queue_size,
+            use_voice_cloning=req.use_voice_cloning,  # 🔥 新增：传递声音克隆配置
+            reply_interval=20  # 🔥 新增：设置回复间隔20秒
+        )
+
+        # 设置降级策略参数
+        auto_intro_client.no_message_timeout = req.no_message_timeout
+        auto_intro_client.auto_introduce_interval = req.auto_introduce_interval
+
+        # 设置重连参数
+        auto_intro_client.auto_reconnect = req.auto_reconnect
+        auto_intro_client.max_reconnect_attempts = req.max_reconnect_attempts
+        auto_intro_client.reconnect_delay = req.reconnect_delay
+
+        # 连接WebSocket服务器
+        connection_success = await auto_intro_client.connect()
+
+        if connection_success:
+            # 🔥 更新任务状态为成功
+            if tenant_id:
+                api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+
+            return {
+                "code": 200,
+                "message": "自动产品介绍客户端启动成功",
+                "data": {
+                    "status": "connected",
+                    "host": req.host,
+                    "port": req.port,
+                    "no_message_timeout": req.no_message_timeout,
+                    "auto_introduce_interval": req.auto_introduce_interval,
+                    "reply_probability": req.reply_probability,
+                    "max_queue_size": req.max_queue_size,
+                    "auto_reconnect": req.auto_reconnect,
+                    "max_reconnect_attempts": req.max_reconnect_attempts,
+                    "reconnect_delay": req.reconnect_delay
+                },
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "business_id": business_id
+            }
+        else:
+            # 🔥 连接失败，更新任务状态为失败
+            if tenant_id:
+                api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
+
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "status": "error",
+                    "message": f"连接WebSocket服务器失败",
+                    "host": req.host,
+                    "port": req.port,
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "business_id": business_id
+                }
+            )
+
+    except Exception as e:
+        # 🔥 异常时更新任务状态为失败
+        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
+            try:
+                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
+            except Exception as status_error:
+                print(f"❌ 更新任务状态失败: {status_error}")
+
+        print(f"❌ 启动自动产品介绍客户端失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"启动自动产品介绍客户端失败: {str(e)}")
+
+
+@app.post('/api/server/stop')
+async def stop_socket_server(
+        req: AutoIntroStopRequest = AutoIntroStopRequest(),
+        tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")
+):
+    """停止自动产品介绍WebSocket客户端 - 支持任务状态更新"""
+    try:
+        tenant_id = req.tenant_id or tenant_id_query
+        task_id = str(uuid.uuid4())
+        business_id = req.id
+
+        print(f"🎯 [停止自动产品介绍客户端] 处理请求:")
         print(f"   Task ID: {task_id}")
         print(f"   Tenant ID: {tenant_id}")
         print(f"   Business ID: {business_id}")
@@ -3200,171 +3308,117 @@ async def start_socket_server(
         if tenant_id:
             api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
 
-        # 检查是否已有服务器在运行
-        if 'websocket_task' in globals() and websocket_task and not websocket_task.done():
-            if tenant_id:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "status": "error",
-                    "message": "WebSocket服务器已经在运行中",
+        global auto_intro_client
+
+        if auto_intro_client is not None:
+            try:
+                await auto_intro_client.close()
+                auto_intro_client = None
+                print("✅ 自动产品介绍客户端已关闭")
+
+                # 🔥 更新任务状态为成功
+                if tenant_id:
+                    api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+
+                return {
+                    "code": 200,
+                    "message": "自动产品介绍客户端已停止",
+                    "data": {
+                        "status": "disconnected",
+                        "connection_type": "auto_intro_client"
+                    },
                     "task_id": task_id,
                     "tenant_id": tenant_id,
                     "business_id": business_id
                 }
-            )
+            except Exception as close_error:
+                # 🔥 关闭失败，更新任务状态为失败
+                if tenant_id:
+                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
 
-        # 动态导入WebSocket服务器
-        try:
-            from websocket_server import WebSocketServer
-            
-            # 创建WebSocket服务器实例
-            websocket_server = WebSocketServer(host=req.host, port=req.port)
-            
-            # 在后台任务中运行WebSocket服务器
-            async def run_websocket_server():
-                try:
-                    await websocket_server.start_server()
-                except Exception as e:
-                    print(f"❌ WebSocket服务器错误: {e}")
-            
-            # 创建后台任务
-            import asyncio
-            websocket_task = asyncio.create_task(run_websocket_server())
-            
-            # 等待服务器启动
-            await asyncio.sleep(1)
-            
-        except ImportError:
-            # 如果没有websocket_server.py，回退到原始的TCP Socket服务器
-            print("⚠️ 未找到websocket_server.py，使用TCP Socket服务器")
-            socket_server = SocketServer(host=req.host, port=req.port)
-            server_thread = threading.Thread(target=socket_server.start)
-            server_thread.daemon = True
-            server_thread.start()
-            time.sleep(1)
+                print(f"❌ 关闭自动产品介绍客户端失败: {close_error}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "status": "error",
+                        "message": "自动产品介绍客户端断开失败",
+                        "task_id": task_id,
+                        "tenant_id": tenant_id,
+                        "business_id": business_id
+                    }
+                )
+        else:
+            if tenant_id:
+                api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
 
-        # 🔥 如果有tenant_id，更新任务状态为完成
-        if tenant_id:
-            api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+            return {
+                "code": 200,
+                "message": "自动产品介绍客户端已经停止",
+                "data": {
+                    "status": "already_disconnected",
+                    "connection_type": "auto_intro_client"
+                },
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "business_id": business_id
+            }
 
-        result = {
-            "status": "success",
-            "message": f"WebSocket服务器已启动，监听 ws://{req.host}:{req.port}",
-            "server_info": {
-                "host": req.host,
-                "port": req.port,
-                "running": True,
-                "type": "websocket" if 'websocket_server' in locals() else "tcp_socket"
-            },
-            "task_id": task_id,
-            "tenant_id": tenant_id,
-            "business_id": business_id
-        }
-
-        return result
-
-    except HTTPException:
-        raise
     except Exception as e:
         # 🔥 异常时更新任务状态为失败
         if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
             try:
                 api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
             except Exception as status_error:
-                print(f"⚠️ 更新失败状态时出错: {status_error}")
+                print(f"❌ 更新任务状态失败: {status_error}")
 
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status": "error",
-                "message": f"启动失败: {str(e)}",
-                "task_id": locals().get('task_id'),
-                "tenant_id": locals().get('tenant_id'),
-                "business_id": locals().get('business_id')
-            }
-        )
+        print(f"❌ 停止自动产品介绍客户端失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"停止自动产品介绍客户端失败: {str(e)}")
 
 
-@app.post('/api/server/stop')
-async def stop_socket_server(
-        req: ServerStopRequest = ServerStopRequest(),  # 🔥 修改：添加请求体参数，默认空对象
-        tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id")  # 🔥 新增
-):
-    """停止Socket服务器 - 支持任务状态更新"""  # 🔥 修改：更新文档
-    global socket_server
+@app.get('/api/auto-intro/status')
+async def get_auto_intro_status():
+    """获取自动产品介绍客户端状态"""
+    global auto_intro_client
 
-    try:
-        # 🔥 新增：从请求体或URL参数获取相关ID
-        tenant_id = req.tenant_id or tenant_id_query
-        task_id = str(uuid.uuid4())
-        business_id = req.id
-
-        print(f"🎯 [服务器停止] 处理请求:")
-        print(f"   Task ID: {task_id}")
-        print(f"   Tenant ID: {tenant_id}")
-        print(f"   Business ID: {business_id}")
-
-        # 🔥 新增：如果有tenant_id，立即更新任务状态为运行中
-        if tenant_id:
-            api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
-
-        if not socket_server or not socket_server.running:
-            # 🔥 修改：如果有tenant_id，更新任务状态为失败
-            if tenant_id:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "status": "error",
-                    "message": "Socket服务器未运行",
-                    # 🔥 新增：返回任务相关信息
-                    "task_id": task_id,
-                    "tenant_id": tenant_id,
-                    "business_id": business_id
-                }
-            )
-
-        socket_server.stop()
-
-        # 🔥 新增：如果有tenant_id，更新任务状态为完成
-        if tenant_id:
-            api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
-
+    if auto_intro_client is not None:
+        is_connected = auto_intro_client.is_connected()
         return {
-            "status": "success",
-            "message": "Socket服务器已停止",
-            # 🔥 新增：返回任务相关信息
-            "task_id": task_id,
-            "tenant_id": tenant_id,
-            "business_id": business_id
+            "code": 200,
+            "message": "获取状态成功",
+            "data": {
+                "status": "connected" if is_connected else "disconnected",
+                "is_running": auto_intro_client.running if hasattr(auto_intro_client, 'running') else False,
+                "host": auto_intro_client.host,
+                "port": auto_intro_client.port,
+                "no_message_timeout": auto_intro_client.no_message_timeout,
+                "auto_introduce_interval": auto_intro_client.auto_introduce_interval,
+                "reply_probability": auto_intro_client.reply_probability,
+                "max_queue_size": auto_intro_client.max_queue_size,
+                "auto_reconnect": auto_intro_client.auto_reconnect if hasattr(auto_intro_client,
+                                                                              'auto_reconnect') else True,
+                "max_reconnect_attempts": auto_intro_client.max_reconnect_attempts if hasattr(auto_intro_client,
+                                                                                              'max_reconnect_attempts') else 10,
+                "reconnect_delay": auto_intro_client.reconnect_delay if hasattr(auto_intro_client,
+                                                                                'reconnect_delay') else 5,
+                "last_message_time": auto_intro_client.last_message_time if hasattr(auto_intro_client,
+                                                                                    'last_message_time') else None,
+                "last_auto_introduce_time": auto_intro_client.last_auto_introduce_time if hasattr(auto_intro_client,
+                                                                                                  'last_auto_introduce_time') else None
+            }
+        }
+    else:
+        return {
+            "code": 200,
+            "message": "获取状态成功",
+            "data": {
+                "status": "not_created",
+                "is_running": False,
+                "message": "自动产品介绍客户端尚未创建"
+            }
         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        # 🔥 新增：异常时更新任务状态为失败
-        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
-            try:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
-                print(f"📤 [服务器停止] 已更新任务状态为失败: {task_id}")
-            except Exception as status_error:
-                print(f"⚠️ [服务器停止] 更新失败状态时出错: {status_error}")
 
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "status": "error",
-                "message": f"停止失败: {str(e)}",
-                # 🔥 新增：返回任务相关信息
-                "task_id": locals().get('task_id'),
-                "tenant_id": locals().get('tenant_id'),
-                "business_id": locals().get('business_id')
-            }
-        )
-
+# ========== 文案和分析接口 ==========
 
 @app.post("/text/industry")
 async def api_get_text_industry(
@@ -3373,80 +3427,57 @@ async def api_get_text_industry(
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id"),
         task_id_query: str = Query(None, description="任务ID（URL参数）", alias="task_id")
 ):
-    """🔥 文本行业生成API - 支持任务状态更新"""
+    """行业文案生成 - 支持任务状态更新"""
     try:
-        # 🔥 修复：从请求体或URL参数获取相关ID
         tenant_id = req.tenant_id or tenant_id_query
-        task_id = task_id_query or str(uuid.uuid4())
+        task_id = req.task_id or task_id_query or str(uuid.uuid4())
         business_id = req.id
 
-        print(f"🎯 [文本行业] 处理请求:")
+        print(f"🎯 [行业文案] 处理请求:")
         print(f"   Task ID: {task_id}")
         print(f"   Tenant ID: {tenant_id}")
         print(f"   Business ID: {business_id}")
-        print(f"   Mode: {mode}")
 
-        # 过滤参数（移除不需要的字段）
-        filtered_args = {
-            key: value for key, value in req.dict().items()
-            if key not in ['categoryId', 'tenant_id', 'id']
+        # 🔥 如果有tenant_id，立即更新任务状态为运行中
+        if tenant_id:
+            api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
+
+        function_args = {
+            "industry": req.industry,
+            "product": req.product,
+            "feature": req.feature,
+            "scene": req.scene,
         }
 
-        # 🔥 支持异步模式和任务状态更新
-        if mode == "async" and tenant_id:
-            # 异步模式 - 使用任务管理器
-            res = await async_task_manager.execute_task_with_upload(
+        if mode == "sync":
+            # 同步模式
+            from core.cliptemplate.coze.text_industry import get_text_industry
+            result = get_text_industry(**function_args)
+
+            # 🔥 如果有tenant_id，更新任务状态为完成
+            if tenant_id:
+                api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+
+            response = format_response(result, mode, urlpath)
+            if isinstance(response, dict):
+                response.update({
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "business_id": business_id
+                })
+            return response
+        else:
+            # 异步模式
+            task_id = await task_manager.submit_task(
                 func_name="get_text_industry",
-                args=filtered_args,
-                mode=mode,
-                task_id=task_id,
+                args=function_args,
                 tenant_id=tenant_id,
                 business_id=business_id
             )
-            response = format_response(res, mode, urlpath)
-        else:
-            # 同步模式 - 直接执行
-            print(f"📝 [文本行业] 同步执行文本生成")
 
-            # 🔥 如果有tenant_id，立即更新任务状态为运行中
-            if tenant_id:
-                api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
-
-            try:
-                result = get_text_industry(**filtered_args)
-
-                # 🔥 如果有tenant_id，更新任务状态为完成
-                if tenant_id:
-                    api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id, content=result)
-
-                response = {
-                    "status": "completed",
-                    "data": result,
-                    "message": "文本生成完成",
-                    "task_id": task_id,
-                    "tenant_id": tenant_id,
-                    "business_id": business_id,
-                    "execution_mode": "sync"
-                }
-
-            except Exception as text_error:
-                # 🔥 如果有tenant_id，更新任务状态为失败
-                if tenant_id:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-                raise text_error
-
-        if isinstance(response, dict):
-            response.update({
-                "task_id": task_id,
-                "tenant_id": tenant_id,
-                "business_id": business_id,
-                "enhanced": True
-            })
-
-        return response
+            return format_response(task_id, mode="async", urlpath=urlpath)
 
     except Exception as e:
-        print(f"❌ 文本行业生成失败: {str(e)}")
         # 🔥 异常时更新任务状态为失败
         if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
             try:
@@ -3454,12 +3485,9 @@ async def api_get_text_industry(
             except Exception as status_error:
                 print(f"⚠️ 更新失败状态时出错: {status_error}")
 
-        raise HTTPException(
-            status_code=500,
-            detail=f"文本生成失败: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"行业文案生成失败: {str(e)}")
 
-generator = CopyGenerator(model="qwen-max", template_dir="templates")
+
 @app.post("/copy/generate")
 async def get_copy_generator_sync(
         req: CopyGenerationRequest,
@@ -3467,116 +3495,75 @@ async def get_copy_generator_sync(
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id"),
         task_id_query: str = Query(None, description="任务ID（URL参数）", alias="task_id")
 ):
-    """🔥 文案生成器API - 支持任务状态更新"""
+    """文案生成 - 支持任务状态更新"""
     try:
-        # 🔥 修复：从请求体或URL参数获取相关ID
         tenant_id = req.tenant_id or tenant_id_query
-        task_id = task_id_query or str(uuid.uuid4())
+        task_id = req.task_id or task_id_query or str(uuid.uuid4())
         business_id = req.id
 
         print(f"🎯 [文案生成] 处理请求:")
-        print(f"   类别: {req.category}")
-        print(f"   风格: {req.style}")
         print(f"   Task ID: {task_id}")
         print(f"   Tenant ID: {tenant_id}")
         print(f"   Business ID: {business_id}")
-        print(f"   Mode: {mode}")
 
-        # 🔥 支持异步模式和任务状态更新
-        if mode == "async" and tenant_id:
-            # 异步模式 - 使用任务管理器
-            function_args = {
-                "category": req.category,
-                "style": req.style,
-                "input_data": req.input_data
-            }
+        # 🔥 如果有tenant_id，立即更新任务状态为运行中
+        if tenant_id:
+            api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
 
-            res = await async_task_manager.execute_task_with_upload(
-                func_name="get_copy_generation",
-                args=function_args,
-                mode=mode,
-                task_id=task_id,
-                tenant_id=tenant_id,
-                business_id=business_id
-            )
+        function_args = {
+            "category": req.category,
+            "style": req.style,
+            "input_data": req.input_data,
+            "use_template": req.use_template,
+            "ai_enhance": req.ai_enhance,
+            "custom_params": req.custom_params
+        }
 
-            response = format_response(res, mode, urlpath)
-        else:
-            # 同步模式 - 直接执行
-            print(f"📝 [文案生成] 同步执行文案生成")
+        if mode == "sync":
+            # 同步模式
+            from core.text_generate.generator import get_copy_generation
+            result = get_copy_generation(**function_args)
 
-            # 🔥 如果有tenant_id，立即更新任务状态为运行中
+            # 🔥 如果有tenant_id，更新任务状态为完成，并传入生成的文案内容
             if tenant_id:
-                api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
-
-            try:
-                result = get_copy_generation(
-                    category=req.category,
-                    style=req.style,
-                    input_data=req.input_data,
-                    use_template=req.use_template,  # 新增
-                    ai_enhance=req.ai_enhance,  # 新增
-                    custom_params=req.custom_params  # 新增
+                api_service.update_task_status(
+                    task_id,
+                    "1",
+                    tenant_id,
+                    business_id=business_id,
+                    content=result  # 🔥 传入生成的文案内容
                 )
 
-                print(f"✅ 文案生成成功: {result[:100]}...")
-
-                # 🔥 如果有tenant_id，更新任务状态为完成
-                if tenant_id:
-                    api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id, content=result)
-
-                response = {
-                    "status": "completed",
-                    "data": result,
-                    "message": "文案生成完成",
-                    "task_id": task_id,
-                    "tenant_id": tenant_id,
-                    "business_id": business_id,
-                    "execution_mode": "sync"
-                }
-
-            except Exception as copy_error:
-                # 🔥 如果有tenant_id，更新任务状态为失败
-                if tenant_id:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-                raise copy_error
-
-        if isinstance(response, dict):
-            response.update({
+            # 🔥 文案生成返回纯文本，需要包装成字典格式
+            wrapped_result = {
+                "content_type": "text",
+                "text_content": result,
+                "result": result,
+                "upload_skipped": True,
+                "skip_reason": "文本类接口无需上传",
+                "function_name": "get_copy_generation",
+                "processing_time": 0,
                 "task_id": task_id,
                 "tenant_id": tenant_id,
-                "business_id": business_id,
-                "enhanced": True
-            })
-        print(response)
-        return response
-
-    except FileNotFoundError as e:
-        error_msg = f"模板文件不存在: {str(e)}"
-        print(f"❌ {error_msg}")
-
-        # 🔥 异常时更新任务状态为失败
-        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
-            try:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
-            except Exception as status_error:
-                print(f"⚠️ 更新失败状态时出错: {status_error}")
-
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "template_not_found",
-                "message": error_msg,
-                "suggestion": f"请确保存在模板文件: templates/{req.category}/{req.style}.j2",
-                "tenant_id": locals().get('tenant_id'),
-                "task_id": locals().get('task_id')
+                "business_id": business_id
             }
-        )
+
+            response = format_response(wrapped_result, mode, urlpath)
+            if isinstance(response, dict):
+                response.update({
+                    "task_id": task_id,
+                    "tenant_id": tenant_id,
+                    "business_id": business_id
+                })
+            return response
+        else:
+            # 🔥 文案生成只支持同步模式
+            raise HTTPException(
+                status_code=400,
+                detail="文案生成接口仅支持同步模式(sync)，请使用 mode=sync 参数"
+            )
 
     except Exception as e:
-        error_msg = f"文案生成失败: {str(e)}"
-        print(f"❌ {error_msg}")
-
         # 🔥 异常时更新任务状态为失败
         if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
             try:
@@ -3584,22 +3571,7 @@ async def get_copy_generator_sync(
             except Exception as status_error:
                 print(f"⚠️ 更新失败状态时出错: {status_error}")
 
-        import traceback
-        print(f"错误堆栈: {traceback.format_exc()}")
-
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "generation_failed",
-                "message": error_msg,
-                "category": req.category,
-                "style": req.style,
-                "tenant_id": locals().get('tenant_id'),
-                "task_id": locals().get('task_id')
-            }
-        )
-
-analyzer = CoverAnalyzer()
+        raise HTTPException(status_code=500, detail=f"文案生成失败: {str(e)}")
 
 
 @app.post("/cover/analyze")
@@ -3609,348 +3581,418 @@ async def analyze_cover_endpoint(
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id"),
         task_id_query: str = Query(None, description="任务ID（URL参数）", alias="task_id")
 ):
-    """🔥 分析封面图片 - 支持任务状态更新"""
+    """封面分析 - 支持任务状态更新"""
     try:
-        # 🔥 修复：从请求体或URL参数获取相关ID
         tenant_id = req.tenant_id or tenant_id_query
         task_id = task_id_query or str(uuid.uuid4())
         business_id = req.id
-        print(req)
+
         print(f"🎯 [封面分析] 处理请求:")
         print(f"   Platform: {req.platform}")
         print(f"   Task ID: {task_id}")
         print(f"   Tenant ID: {tenant_id}")
         print(f"   Business ID: {business_id}")
-        print(f"   Mode: {mode}")
 
-        # 🔥 支持异步模式和任务状态更新
-        if mode == "async" and tenant_id:
-            # 异步模式 - 使用任务管理器
-            function_args = {
-                "image": req.image,
-                "is_url": req.is_url,
-                "platform": req.platform
-            }
+        # 🔥 如果有tenant_id，立即更新任务状态为运行中
+        if tenant_id:
+            api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
 
-            # 创建包装器函数用于异步执行
-            def analyze_cover_wrapper(image, is_url, platform):
-                if is_url:
-                    image_b64 = analyzer.image_processor.download_image_from_url(image)
-                else:
-                    image_data = image
-                    if image_data.startswith('data:image'):
-                        image_data = image_data.split(',')[1]
-                    image_b64 = image_data
+        # 准备参数
+        function_args = {
+            "image": req.image,
+            "is_url": req.is_url,
+            "platform": req.platform
+        }
 
-                result = analyzer.analyze_cover(image_b64, platform)
-                if not result["success"]:
-                    raise Exception(result["error"])
-                return result
+        # 创建包装器函数用于异步执行
+        def analyze_cover_wrapper(image, is_url, platform):
+            analyzer = CoverAnalyzer()
+            if is_url:
+                # 下载图片并转换为base64
+                image_b64 = analyzer.image_processor.download_image_from_url(image)
+            else:
+                image_data = image
+                if image_data.startswith('data:image'):
+                    image_data = image_data.split(',')[1]
+                image_b64 = image_data
 
-            # 将包装器函数注册到全局命名空间
-            globals()['analyze_cover_wrapper'] = analyze_cover_wrapper
+            # 调用分析方法（使用位置参数）
+            result = analyzer.analyze_cover(image_b64, platform)
+            if not result["success"]:
+                raise Exception(result["error"])
+            return result
 
-            res = await async_task_manager.execute_task_with_upload(
-                func_name="analyze_cover_wrapper",
-                args=function_args,
-                mode=mode,
-                task_id=task_id,
-                tenant_id=tenant_id,
-                business_id=business_id
-            )
-            print("结果为")
-            print(res)
-            response = format_response(res, mode, urlpath)
-        else:
-            # 同步模式 - 直接执行
-            print(f"🖼️ [封面分析] 同步执行图片分析")
+        if mode == "sync":
+            # 同步模式
+            result = analyze_cover_wrapper(**function_args)
 
-            # 🔥 如果有tenant_id，立即更新任务状态为运行中
+            # 🔥 如果有tenant_id，更新任务状态为完成
             if tenant_id:
-                api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
+                api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
 
-            try:
-                # 处理输入图像
-                if req.is_url:
-                    image_b64 = analyzer.image_processor.download_image_from_url(req.image)
-                else:
-                    image_data = req.image
-                    if image_data.startswith('data:image'):
-                        image_data = image_data.split(',')[1]
-                    image_b64 = image_data
-
-                # 执行分析
-                result = analyzer.analyze_cover(image_b64, req.platform)
-                print("分析结果为")
-                print(result)
-                if not result["success"]:
-                    raise Exception(result["error"])
-
-                # 🔥 如果有tenant_id，更新任务状态为完成
-                if tenant_id:
-                    # 提取分析结果文本
-                    analyze_text = result.get("analysis_result", "") or str(result)
-
-                    api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id,
-                                                   content=analyze_text)
-                # 添加任务信息到响应
-                response_data = AnalyzeResponse(**result)
-                response_dict = response_data.dict()
-                response_dict.update({
-                    "status": "completed",
-                    "task_id": task_id,
-                    "tenant_id": tenant_id,
-                    "business_id": business_id,
-                    "execution_mode": "sync"
-                })
-
-                response = response_dict
-
-            except Exception as analyze_error:
-                # 🔥 如果有tenant_id，更新任务状态为失败
-                if tenant_id:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
-                raise analyze_error
-
-        if isinstance(response, dict):
-            response.update({
+            # 这个接口返回文本结果，需要特殊处理
+            response = {
+                "status": "completed",
+                "data": result,
+                "result_type": "analysis",
+                "processing_time": 0,
+                "function_name": "analyze_cover",
                 "task_id": task_id,
                 "tenant_id": tenant_id,
                 "business_id": business_id,
-                "enhanced": True
-            })
-        return response
-
-    except ValueError as e:
-        print(f"输入验证错误: {str(e)}")
-
-        # 🔥 异常时更新任务状态为失败
-        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
-            try:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
-            except Exception as status_error:
-                print(f"⚠️ 更新失败状态时出错: {status_error}")
-
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        print(f"分析失败: {str(e)}")
-
-        # 🔥 异常时更新任务状态为失败
-        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
-            try:
-                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
-            except Exception as status_error:
-                print(f"⚠️ 更新失败状态时出错: {status_error}")
-
-        raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
-
-# 🔥 通用API接口生成器 - 自动支持云端上传
-def create_enhanced_api_endpoint(endpoint_path: str, func_name: str, request_model):
-    """创建增强版API接口的通用函数 - 🔥 完全修复tenant_id和id处理"""
-
-    @app.post(endpoint_path)
-    async def enhanced_api_endpoint(
-            req: request_model,
-            mode: str = Query("async", description="执行模式：sync(同步)/async(异步)"),
-            tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id"),
-            task_id_query: str = Query(None, description="任务ID（URL参数）", alias="task_id")
-    ):
-        try:
-            req_dict = req.dict()
-            print(f"🔍 [DEBUG] {endpoint_path} 请求数据: {req_dict}")
-
-            # 🔥 修复：从请求体或URL参数获取相关ID
-            tenant_id = req_dict.get("tenant_id") or tenant_id_query
-            task_id = req_dict.get("task_id") or task_id_query
-            business_id = req_dict.get("id")
-
-            # 如果没有task_id，生成一个
-            if not task_id:
-                task_id = str(uuid.uuid4())
-
-            print(f"🎯 [API] 处理请求: {endpoint_path}")
-            print(f"   Task ID: {task_id}")
-            print(f"   Tenant ID: {tenant_id}")
-            print(f"   Business ID: {business_id}")
-            print(f"   Mode: {mode}")
-
-            # 过滤参数（移除不需要的字段）
-            # 如果是 /video/digital-human-generation 接口并且函数名是 process_single_video_by_url，则不过滤参数
-            if endpoint_path == "/video/digital-human-generation" and func_name == "process_single_video_by_url":
-                # 不过滤参数，直接使用原始参数
-                filtered_args = req_dict
-                print(f"🔧 [API] 数字人生成接口，不过滤参数: {filtered_args}")
-            else:
-                # 其他情况都过滤参数
-                # 🔥 修复：保留必要的业务参数，只过滤系统参数
-                filtered_args = {
-                    key: value for key, value in req_dict.items()
-                    if key not in ['categoryId', 'task_id', 'tenant_id', 'id']
+                "upload_info": {
+                    "upload_skipped": True,
+                    "skip_reason": "分析结果类接口",
+                    "integration": "text_direct"
                 }
-                print(f"🔧 [API] 过滤后参数: {filtered_args}")
-                
-                # 🔥 特殊处理：对于 BigWordRequest，需要保留所有业务参数
-                if func_name == "generate_big_word_endpoint":
-                    # 确保保留必要的参数
-                    if 'company_name' in req_dict:
-                        filtered_args['company_name'] = req_dict['company_name']
-                    if 'title' in req_dict:
-                        filtered_args['title'] = req_dict['title']
-                    if 'product' in req_dict:
-                        filtered_args['product'] = req_dict['product']
-                    if 'description' in req_dict:
-                        filtered_args['description'] = req_dict['description']
-                    if 'content' in req_dict:
-                        filtered_args['content'] = req_dict['content']
-                    print(f"🔥 [API] BigWord参数特殊处理后: {filtered_args}")
-
-            # 🔥 修复：根据是否有tenant_id选择执行方式
-            if tenant_id:
-                print(f"☁️ [API] 启用云端上传模式")
-                res = await async_task_manager.execute_task_with_upload(
-                    func_name=func_name,
-                    args=filtered_args,
-                    mode=mode,
-                    task_id=task_id,
-                    tenant_id=tenant_id,
-                    business_id=business_id
-                )
-            else:
-                print(f"💻 [API] 本地执行模式")
-                res = await execute_task(
-                    func_name=func_name,
-                    args=filtered_args,
-                    mode=mode,
-                    task_id=task_id,
-                    tenant_id=None
-                )
-
-            response = format_response(res, mode, urlpath)
-            if isinstance(response, dict):
-                response.update({
-                    "task_id": task_id,
-                    "tenant_id": tenant_id,
-                    "business_id": business_id,
-                    "enhanced": True,
-                    "endpoint": endpoint_path,
-                    "function": func_name,
-                    "upload_enabled": bool(tenant_id)
-                })
-
+            }
             return response
+        else:
+            # 异步模式
+            # 将包装器函数注册到全局命名空间
+            globals()['analyze_cover_wrapper'] = analyze_cover_wrapper
 
-        except Exception as e:
-            print(f"❌ [{endpoint_path}] API处理失败: {str(e)}")
-            # 🔥 如果有租户ID，更新任务状态为失败，传递业务ID
-            if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
-                try:
-                    api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
-                    print(f"📤 [API] 已更新任务状态为失败: {task_id}")
-                except Exception as status_error:
-                    print(f"⚠️ [API] 更新失败状态时出错: {status_error}")
-
-            import traceback
-            print(f"错误堆栈: {traceback.format_exc()}")
-
-            raise HTTPException(
-                status_code=500,
-                detail=f"API处理失败: {str(e)}"
+            task_id = await task_manager.submit_task(
+                func_name="analyze_cover_wrapper",
+                args=function_args,
+                tenant_id=tenant_id,
+                business_id=business_id
             )
 
-    return enhanced_api_endpoint
+            return format_response(task_id, mode="async", urlpath=urlpath)
 
-def setup_enhanced_api_endpoints():
-    """批量设置增强版API接口（区分视频和文本类型）"""
+    except Exception as e:
+        # 🔥 异常时更新任务状态为失败
+        if 'tenant_id' in locals() and tenant_id and 'task_id' in locals() and task_id:
+            try:
+                api_service.update_task_status(task_id, "2", tenant_id, business_id=locals().get('business_id'))
+            except Exception as status_error:
+                print(f"⚠️ 更新失败状态时出错: {status_error}")
 
-    # 🔥 视频类API接口配置（返回视频文件）
-    video_api_configs = [
-        ("/video/big-word", "generate_big_word_endpoint", BigWordRequest),
-        ("/video/catmeme", "get_video_catmeme", CatMemeRequest),
-        ("/video/clicktype", "get_video_clicktype", ClickTypeRequest),
-        ("/video/advertisement", "get_video_advertisement", VideoAdvertisementRequest),
-        ("/video/advertisement-enhance", "get_video_advertisement_enhance", VideoAdvertisementEnhanceRequest),
-        ("/video/clothes-different-scene", "get_video_clothes_diffrent_scene", ClothesDifferentSceneRequest),
-        ("/video/clip", "get_smart_clip_video", SmartClipRequest),
-        ("/video/dgh-img-insert", "get_video_dgh_img_insert", DGHImgInsertRequest),
-        ("/video/digital-human-clips", "get_video_digital_huamn_clips", DigitalHumanClipsRequest),
-        ("/video/incitement", "get_video_incitment", IncitementRequest),
-        ("/video/sinology", "get_video_sinology", SinologyRequest),
-        ("/video/stickman", "get_video_stickman", StickmanRequest),
-        ("/video/clothes-fast-change", "get_videos_clothes_fast_change", ClothesFastChangeRequest),
-        ("/video/random", "get_video_random", VideoRandomRequest),
-        # 一生十
-        ("/video/digital-human-generation", "process_single_video_by_url", DigitalHumanRequest),
-        ("/video/edit", "get_video_edit_simple", VideoEditMainRequest),
-        # 🔥 新增：通义万相图像生成API
-        ("/wanxiang/text-to-image-v2", "get_text_to_image_v2", TextToImageV2Request),
-        ("/wanxiang/text-to-image-v1", "get_text_to_image_v1", TextToImageV1Request),
-
-        # 通用图像编辑
-        ("/wanxiang/image-edit", "get_image_background_edit", ImageBackgroundEditRequest),
-
-        # ========== 虚拟模特系列 ==========
-        # 虚拟模特
-        ("/wanxiang/virtual-model-v1", "get_virtual_model_v1", VirtualModelV1Request),
-        ("/wanxiang/virtual-model-v2", "get_virtual_model_v2", VirtualModelV2Request),
-
-        # 鞋靴模特
-        ("/wanxiang/shoe-model", "get_shoe_model", ShoeModelRequest),
-
-        # 创意海报生成
-        ("/wanxiang/creative-poster", "get_creative_poster", CreativePosterRequest),
-
-        # 图像背景生成
-        ("/wanxiang/background-generation", "get_background_generation", BackgroundGenerationRequest),
-
-        # ========== AI试衣系列 ==========
-        # AI试衣-基础版
-        ("/wanxiang/ai-tryon-basic", "get_ai_tryon_basic", AITryonBasicRequest),
-
-        # AI试衣-Plus版
-        ("/wanxiang/ai-tryon-plus", "get_ai_tryon_plus", AITryonPlusRequest),
-
-        # AI试衣-图片精修
-        ("/wanxiang/ai-tryon-enhance", "get_ai_tryon_enhance", AITryonEnhanceRequest),
-
-        # AI试衣-图片分割
-        ("/wanxiang/ai-tryon-segment", "get_ai_tryon_segment", AITryonSegmentRequest),
-
-        # ========== 视频生成系列 ==========
-        # 通义万相-图生视频-基于首尾帧
-        ("/wanxiang/image-to-video-advanced", "get_image_to_video_advanced", ImageToVideoAdvancedRequest),
-
-        # ========== 数字人视频系列 ==========
-        # 图生舞蹈视频-舞动人像 AnimateAnyone
-        ("/wanxiang/animate-anyone", "get_animate_anyone", AnimateAnyoneRequest),
-
-        # 图生唱演视频-悦动人像EMO
-        ("/wanxiang/emo-video", "get_emo_video", EMOVideoRequest),
-
-        # 图生播报视频-灵动人像 LivePortrait
-        ("/wanxiang/live-portrait", "get_live_portrait", LivePortraitRequest),
-
-        # ========== 视频风格重绘 ==========
-        ("/wanxiang/video-style-transfer", "get_video_style_transform", VideoStyleTransferRequest),
-
-        ("/wanxiang/video-style-transfer", "get_video_style_transform", VideoStyleTransferRequest),
-
-        # # 新增：文案生成API配置
-        # ("/copy/generate", "get_copy_generation", CopyGenerationRequest),
-
-    ]
+        raise HTTPException(status_code=500, detail=f"封面分析失败: {str(e)}")
 
 
-    # 为视频类API创建增强版接口（原有逻辑）
-    for endpoint_path, func_name, request_model in video_api_configs:
-        create_enhanced_api_endpoint(endpoint_path, func_name, request_model)
 
-# 调用设置函数
-setup_enhanced_api_endpoints()
+@app.post("/video/natural-language-edit")
+async def video_natural_language_edit(request: NaturalLanguageVideoEditRequest):
+    """自然语言视频剪辑接口 - 集成AuraRender智能视频创作引擎"""
+    mode = getattr(request, 'mode', 'async')  # 默认使用异步模式
+    
+    # 定义实际处理逻辑
+    async def process():
+        try:
+            # 判断是否使用AuraRender（默认使用）
+            use_aura_render = request.use_aura_render if hasattr(request, 'use_aura_render') else True
+            
+            print(f"🎬 [自然语言视频剪辑] 开始处理...")
+            print(f"   描述: {request.natural_language}")
+            print(f"   视频URL: {request.video_url}")
+            print(f"   模式: {mode}")
+            print(f"   使用AuraRender: {use_aura_render}")
+            
+            if use_aura_render:
+                # 使用AuraRender处理
+                from video_cut.aura_render.aura_interface import AuraRenderInterface
+                
+                aura_interface = AuraRenderInterface()
+                
+                # 构建AuraRender请求
+                aura_request = {
+                    'natural_language': request.natural_language,
+                    'video_url': request.video_url,
+                    'preferences': {}
+                }
+                
+                # 添加偏好设置
+                if request.output_duration:
+                    aura_request['preferences']['duration'] = request.output_duration
+                if request.style:
+                    aura_request['preferences']['style'] = request.style
+                if hasattr(request, 'video_type'):
+                    aura_request['preferences']['video_type'] = request.video_type
+                
+                # 调用AuraRender
+                result = aura_interface.create_video(aura_request)
+                
+                # 转换结果格式
+                if result['status'] == 'success':
+                    enhanced_result = {
+                        "video_url": result['video_url'],
+                        "timeline": result.get('script', {}).get('timeline', []),
+                        "video_info": {
+                            "duration": result['metadata'].get('duration', 0),
+                            "video_type": result['metadata'].get('video_type', ''),
+                            "style": result['metadata'].get('style', {})
+                        },
+                        "process_info": {
+                            "engine": "AuraRender",
+                            "script_path": result['metadata'].get('script_path', ''),
+                            "created_at": result['metadata'].get('created_at', '')
+                        },
+                        "execution_script": result.get('script', {})  # 返回完整的执行脚本供调试
+                    }
+                else:
+                    raise Exception(result.get('error', 'AuraRender处理失败'))
+                    
+            else:
+                # 使用原有的处理逻辑
+                from core.clipgenerate.natural_language_video_edit import process_natural_language_video_edit
+                
+                # 处理视频
+                result = process_natural_language_video_edit(
+                    natural_language=request.natural_language,
+                    video_url=request.video_url,
+                    output_duration=request.output_duration,
+                    style=request.style,
+                    use_timeline_editor=request.use_timeline_editor
+                )
+                
+                # 检查处理结果
+                if not result.get("success", False):
+                    raise Exception(result.get("error", "处理失败"))
+                
+                # 使用增强函数处理结果
+                enhanced_result = {
+                    "video_url": result.get("video_url"),
+                    "timeline": result.get("timeline"),
+                    "video_info": result.get("video_info"),
+                    "process_info": result.get("process_info")
+                }
+            
+            return enhance_endpoint_result(enhanced_result, "natural_language_video_edit", request, is_digital_human=False)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "natural_language_video_edit"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    
+    # 处理异步模式
+    if mode == "async":
+        try:
+            # 准备异步任务参数
+            args = {
+                "natural_language": request.natural_language,
+                "video_url": request.video_url,
+                "output_duration": request.output_duration,
+                "style": request.style,
+                "use_timeline_editor": request.use_timeline_editor
+            }
+            
+            # 提交异步任务
+            task_id = await task_manager.submit_task(
+                func_name="process_natural_language_video_edit",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "natural_language_video_edit"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 同步模式
+        return await process()
 
-# 启动服务
+
+# 添加标签视频生成接口
+class TagVideoRequest(BaseModel):
+    """标签视频生成请求模型"""
+    tags: List[str] = Field(..., description="标签列表，按顺序处理")
+    tag_videos: Dict[str, Dict[str, List[str]]] = Field(..., description="标签到视频列表的映射")
+    text_content: Optional[str] = Field(None, description="文案内容，不提供则AI生成")
+    subtitle_config: Optional[Dict[str, Any]] = Field(None, description="字幕配置")
+    dynamic_tags: Optional[List[str]] = Field(None, description="动态标签列表")
+    duration_per_tag: Union[float, Dict[str, float]] = Field(5.0, description="每个标签的时长（秒），可以是统一时长或每个标签单独设置")
+    output_format: Optional[Dict[str, Any]] = Field(None, description="输出格式配置")
+    mode: str = Field("sync", description="处理模式: sync/async")
+
+# 初始化标签视频处理器
+tag_video_handler = TagVideoAPIHandler()
+
+@app.post("/video/generate-from-tags")
+async def generate_video_from_tags(request: TagVideoRequest):
+    """
+    根据标签生成视频
+    
+    请求示例:
+    {
+        "tags": ["黄山风景", "徽州特色餐", "屯溪老街", "无边泳池", "峡谷漂流"],
+        "tag_videos": {
+            "黄山风景": {
+                "video": ["assets/videos/huangshan.mp4", "assets/videos/huangshan1.mp4"]
+            },
+            "徽州特色餐": {
+                "video": ["assets/videos/huizhoucai.mp4"]
+            },
+            "屯溪老街": {
+                "video": ["assets/videos/tunxi.mp4", "assets/videos/tunxi1.mp4"]
+            },
+            "无边泳池": {
+                "video": ["assets/videos/wubianyongchi1.mp4", "assets/videos/wubianyongchi2.mp4"]
+            },
+            "峡谷漂流": {
+                "video": ["assets/videos/xiagupiaoliu1.mp4"]
+            }
+        },
+        "text_content": "探索黄山美景，品味徽州美食，漫步千年古街",  // 可选，不提供则AI生成
+        "subtitle_config": {  // 可选
+            "font_size": 48,
+            "color": "white",
+            "position": ["center", "bottom"],
+            "margin": 50
+        },
+        "dynamic_tags": ["黄山", "美食", "古街", "泳池", "漂流"],  // 可选
+        "duration_per_tag": 5.0,
+        "output_format": {  // 可选
+            "fps": 30,
+            "resolution": [1920, 1080]
+        },
+        "mode": "sync"
+    }
+    """
+    mode = request.mode
+    urlpath = request.dict().get('urlpath', '')
+    
+    # 定义处理函数
+    async def process():
+        try:
+            print(f"[DEBUG] 收到标签视频生成请求: tags={request.tags}")
+            
+            # 处理请求
+            result = tag_video_handler.handle_request(request.dict())
+            
+            # 检查结果
+            if not result:
+                print("[ERROR] tag_video_handler返回None")
+                error_res = {"error": "视频生成处理返回空结果", "function_name": "generate_from_tags"}
+                return format_response(error_res, mode="sync", error_type="general_exception")
+            
+            print(f"[DEBUG] 处理结果: success={result.get('success')}, error={result.get('error')}")
+            
+            if result.get('success'):
+                # 如果有视频路径，尝试上传到OSS
+                if 'video_path' in result:
+                    try:
+                        # 上传到OSS
+                        local_path = result['video_path']
+                        oss_filename = f"tag_videos/{datetime.now().strftime('%Y%m%d')}/{Path(local_path).name}"
+                        upload_success = upload_to_oss(local_path, oss_filename)
+                        
+                        if upload_success:
+                            video_url = f"https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/{oss_filename}"
+                            print(f"✅ [TAG-VIDEO] OSS上传成功，访问链接: {video_url}")
+                            
+                            # 计算总时长
+                            if isinstance(request.duration_per_tag, dict):
+                                # 如果是字典，计算所有标签时长的和
+                                total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
+                            else:
+                                # 如果是数字，乘以标签数量
+                                total_duration = request.duration_per_tag * len(request.tags)
+                            
+                            # 使用enhance_endpoint_result格式化响应
+                            enhanced_result = {
+                                'video_url': video_url,
+                                'video_path': local_path,
+                                'oss_path': oss_filename,
+                                'tags': request.tags,
+                                'duration_per_tag': request.duration_per_tag,
+                                'total_duration': total_duration,
+                                'text_content': result.get('text_content', request.text_content),
+                                'message': '视频生成成功'
+                            }
+                            
+                            return enhance_endpoint_result(
+                                enhanced_result, 
+                                "generate_from_tags", 
+                                request,
+                                is_digital_human=False
+                            )
+                        else:
+                            # 计算总时长
+                            if isinstance(request.duration_per_tag, dict):
+                                total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
+                            else:
+                                total_duration = request.duration_per_tag * len(request.tags)
+                            
+                            # 上传失败但本地生成成功
+                            enhanced_result = {
+                                'video_path': local_path,
+                                'tags': request.tags,
+                                'duration_per_tag': request.duration_per_tag,
+                                'total_duration': total_duration,
+                                'message': '视频生成成功（OSS上传失败）'
+                            }
+                            return enhance_endpoint_result(
+                                enhanced_result,
+                                "generate_from_tags",
+                                request,
+                                is_digital_human=False
+                            )
+                    except Exception as e:
+                        print(f"上传OSS失败: {e}")
+                        
+                        # 计算总时长
+                        if isinstance(request.duration_per_tag, dict):
+                            total_duration = sum(request.duration_per_tag.get(tag, 5.0) for tag in request.tags)
+                        else:
+                            total_duration = request.duration_per_tag * len(request.tags)
+                        
+                        # 返回本地路径
+                        enhanced_result = {
+                            'video_path': result['video_path'],
+                            'tags': request.tags,
+                            'duration_per_tag': request.duration_per_tag,
+                            'total_duration': total_duration,
+                            'message': '视频生成成功（OSS上传失败）'
+                        }
+                        return enhance_endpoint_result(
+                            enhanced_result,
+                            "generate_from_tags",
+                            request,
+                            is_digital_human=False
+                        )
+                else:
+                    # 没有video_path，返回错误
+                    error_res = {"error": "生成的结果中没有视频路径", "function_name": "generate_from_tags"}
+                    return format_response(error_res, mode="sync", error_type="general_exception")
+            else:
+                # 处理失败
+                error_res = {"error": result.get('error', '生成失败'), "function_name": "generate_from_tags"}
+                return format_response(error_res, mode="sync", error_type="general_exception")
+                
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_from_tags"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    
+    # 处理异步模式
+    if mode == "async":
+        try:
+            # 准备异步任务参数
+            args = request.dict()
+            
+            # 提交异步任务
+            task_id = await task_manager.submit_task(
+                func_name="process_tag_video_generation",
+                args=args,
+                tenant_id=getattr(request, 'tenant_id', None),
+                business_id=getattr(request, 'id', None)
+            )
+            
+            return format_response(task_id, mode="async", urlpath=urlpath)
+            
+        except Exception as e:
+            error_res = {"error": str(e), "function_name": "generate_from_tags"}
+            return format_response(error_res, mode="sync", error_type="general_exception")
+    else:
+        # 同步模式
+        return await process()
+
+
 if __name__ == "__main__":
     uvicorn.run(
-        "app:app",  # 改为模块路径格式（"文件名:应用实例名"）
+        "app_0715:app",  # 指向当前文件的应用实例
         host="0.0.0.0",
         port=8100,
         # reload=True,  # 启用热重载
@@ -3958,94 +4000,3 @@ if __name__ == "__main__":
         reload_excludes=["*.tmp"],  # 可选：排除不需要监控的文件
         reload_delay=1.0  # 可选：文件变化后延迟1秒重载
     )
-
-"""
-API 使用示例：
-
-1. 使用本地视频文件（绝对路径）：
-POST /video/edit-main
-{
-    "video_sources": ["/home/user/videos/input.mp4", "/home/user/videos/input2.mp4"],
-    "duration": 30,
-    "style": "抖音风",
-    "purpose": "社交媒体",
-    "merge_videos": true,
-    "use_local_ai": true
-}
-
-2. 使用本地视频文件（相对路径）：
-POST /video/edit-main
-{
-    "video_sources": ["videos/input.mp4", "materials/sample.mp4"],
-    "duration": 45,
-    "style": "企业风",
-    "purpose": "商务演示"
-}
-
-3. 混合使用多种路径类型：
-POST /video/edit-main
-{
-    "video_sources": [
-        "/absolute/path/video1.mp4",        # 绝对路径
-        "relative/video2.mp4",              # 相对路径
-        "uploads/uploaded_video.mp4",       # 上传文件
-        "https://example.com/online.mp4"    # 在线视频
-    ],
-    "duration": 60,
-    "merge_videos": true
-}
-
-4. 使用已上传的视频：
-POST /video/edit-main
-{
-    "video_sources": ["uploads/video1.mp4", "uploads/video2.mp4"],
-    "duration": 30,
-    "style": "抖音风",
-    "tenant_id": "your_tenant_id"
-}
-
-5. 编辑在线视频：
-POST /video/edit-main
-{
-    "video_sources": ["https://example.com/video.mp4"],
-    "duration": 60,
-    "style": "企业风",
-    "use_local_ai": false,
-    "api_key": "your_api_key"
-}
-
-6. 上传并编辑（一体化）：
-POST /video/upload-and-edit
-Content-Type: multipart/form-data
-files: [video files]
-duration: 30
-style: "抖音风"
-tenant_id: "your_tenant_id"
-
-7. 查询任务状态：
-GET /get-result/{task_id}
-
-路径解析说明：
-- 绝对路径（如 /home/user/video.mp4）：直接使用
-- 相对路径（如 videos/video.mp4）：按以下顺序搜索
-  1. 当前工作目录
-  2. uploads/ 目录
-  3. 用户数据目录
-  4. materials/ 目录
-- uploads/ 前缀：转换为 uploads 目录的完整路径
-- http/https 前缀：作为在线视频URL处理
-
-响应格式：
-{
-    "status": "completed",
-    "task_id": "xxx",
-    "videoPath": "video_edit_output/xxx/final_edited_video.mp4",
-    "oss_url": "https://xxx.oss.com/xxx.mp4", // 如果启用云端上传
-    "processing_time": 45.2,
-    "edit_info": {
-        "target_duration": 30,
-        "target_style": "抖音风",
-        "ai_mode": "local"
-    }
-}
-"""

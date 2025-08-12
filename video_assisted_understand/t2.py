@@ -1,9 +1,9 @@
 import cv2
 import numpy as np
 from skimage.exposure import match_histograms
-from skimage import io, color, img_as_ubyte
-import matplotlib.pyplot as plt
 from collections import Counter
+from sklearn.cluster import KMeans
+
 
 # 假设的Qwen接口，用于智能分析主题并推荐最合适的风格参考图像
 def qwen_theme_analysis(theme_description, images_info):

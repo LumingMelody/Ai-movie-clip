@@ -80,6 +80,7 @@ class TimelineGenerator:
         """初始化生成器"""
         self.default_resolution = {"width": 1920, "height": 1080}
         self.default_fps = 30
+        self.default_video_duration = 60
         
         # 预设模板
         self.templates = {
@@ -171,11 +172,16 @@ class TimelineGenerator:
             
             # 处理每个片段
             for clip_data in segment.get("clips", []):
+                # 获取片段的默认时长，优先使用segment中的时长信息
+                segment_duration = segment.get("duration", self.default_video_duration)
+                default_end = clip_data.get("end", segment_duration)
+                default_clip_out = clip_data.get("clipOut", segment_duration)
+                
                 clip = {
                     "start": clip_data.get("start", 0),
-                    "end": clip_data.get("end", 10),
+                    "end": default_end,
                     "clipIn": clip_data.get("clipIn", 0),
-                    "clipOut": clip_data.get("clipOut", 10),
+                    "clipOut": default_clip_out,
                     "filters": self._process_filters(clip_data.get("effects", [])),
                     "transform": self._process_transform(clip_data.get("transform", {})),
                     "opacity": clip_data.get("opacity", 1.0),

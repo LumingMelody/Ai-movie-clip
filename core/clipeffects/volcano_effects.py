@@ -13,6 +13,10 @@ from moviepy import VideoClip, TextClip, CompositeVideoClip
 import numpy as np
 from dataclasses import dataclass
 from enum import Enum
+from dotenv import load_dotenv
+
+# 加载.env文件
+load_dotenv()
 
 
 class EffectType(Enum):
@@ -42,6 +46,7 @@ class VolcanoEffects:
         # 基础滤镜
         "clear": VolcanoEffect("1184003", EffectType.FILTER, "清晰", "清晰滤镜效果"),
         "afternoon": VolcanoEffect("1184004", EffectType.FILTER, "午后", "午后滤镜效果"),
+        "复古午后": VolcanoEffect("1184004", EffectType.FILTER, "复古午后", "复古午后滤镜效果"),  # 映射到午后效果
         "muji": VolcanoEffect("1184005", EffectType.FILTER, "MUJI", "MUJI风格滤镜"),
         "fair": VolcanoEffect("1184006", EffectType.FILTER, "白皙", "白皙滤镜效果"),
         "walnut": VolcanoEffect("1184007", EffectType.FILTER, "胡桃木", "胡桃木风格滤镜"),
@@ -171,7 +176,8 @@ class VolcanoEffects:
     # 转场效果ID - 基于火山引擎官方文档
     TRANSITIONS = {
         # 基础转场效果
-        "leaf_flip": VolcanoEffect("1182355", EffectType.TRANSITION, "叶片翻转", "叶片翻转转场效果"),
+        "leaf_flip": VolcanoEffect("1180306", EffectType.TRANSITION, "叶片翻转", "叶片翻转转场效果"),  # 官方ID: 1180306
+        "叶片翻转": VolcanoEffect("1180306", EffectType.TRANSITION, "叶片翻转", "叶片翻转转场效果"),  # 中文别名
         "blinds": VolcanoEffect("1182356", EffectType.TRANSITION, "百叶窗", "百叶窗转场效果"),
         "wind_blow": VolcanoEffect("1182357", EffectType.TRANSITION, "风吹", "风吹转场效果"),
         "alternating": VolcanoEffect("1182359", EffectType.TRANSITION, "交替出场", "交替出场转场效果"),
@@ -201,13 +207,30 @@ class VolcanoEffects:
         初始化火山引擎特效管理器
         
         Args:
-            access_key_id: 访问密钥ID
-            secret_access_key: 访问密钥Secret
-            region: 服务区域
+            access_key_id: 访问密钥ID（如果不提供，从环境变量读取）
+            secret_access_key: 访问密钥（如果不提供，从环境变量读取）
+            region: 地区
         """
+        # 从环境变量读取密钥（如果没有提供）
+        if not access_key_id:
+            access_key_id = os.getenv('VOLC_ACCESS_KEY_ID')
+        if not secret_access_key:
+            secret_access_key = os.getenv('VOLC_SECRET_ACCESS_KEY')
+            
+        # 打印配置状态用于调试
+        if access_key_id and secret_access_key:
+            print(f"🌋 火山引擎已配置: Key={access_key_id[:10]}...")
+        else:
+            print(f"⚠️ 火山引擎未配置: VOLC_ACCESS_KEY_ID={'已设置' if access_key_id else '未设置'}")
+            
         self.access_key_id = access_key_id
         self.secret_access_key = secret_access_key
         self.region = region
+        
+        # 控制是否使用本地模拟（可通过环境变量控制）
+        self.use_local_simulation = os.getenv('VOLCANO_USE_LOCAL', 'true').lower() == 'true'
+        if self.use_local_simulation:
+            print("   📌 使用本地模拟模式 (设置 VOLCANO_USE_LOCAL=false 使用真实API)")
         self.service = "vod"  # 视频点播服务
         self.api_url = f"https://{self.service}.volcengineapi.com"
         self.api_version = "2020-11-19"
@@ -505,7 +528,31 @@ class VolcanoEffects:
         Returns:
             处理后的剪辑
         """
-        print(f"🎨 Applying {effect.effect_type.value}: {effect.name} (ID: {effect.effect_id})")
+        print(f"🌋 Applying {effect.effect_type.value}: {effect.name} (ID: {effect.effect_id})")
+        
+        # 根据配置决定是否使用本地模拟
+        if self.use_local_simulation or not self.access_key_id:
+            print(f"🔄 使用本地效果模拟火山引擎特效")
+            # 根据特效类型应用本地效果
+            if effect.name in ["zoom_in", "放大"]:
+                from core.clipeffects import easy_clip_effects
+                return easy_clip_effects.zoom_in(clip, duration=params.get("duration", 2), intensity=0.3)
+            elif effect.name in ["zoom_out", "缩小"]:
+                from core.clipeffects import easy_clip_effects
+                return easy_clip_effects.zoom_out(clip, duration=params.get("duration", 2), intensity=0.3)
+            elif effect.name in ["slide_in_left", "向左滑入"]:
+                from core.clipeffects import easy_clip_effects
+                return easy_clip_effects.pan(clip, duration=params.get("duration", 2), intensity=100, direction='left')
+            elif effect.name in ["slide_in_right", "向右滑入"]:
+                from core.clipeffects import easy_clip_effects
+                return easy_clip_effects.pan(clip, duration=params.get("duration", 2), intensity=100, direction='right')
+            elif effect.name == "glitch":
+                from core.clipeffects import easy_clip_effects
+                return easy_clip_effects.glitch(clip, intensity=3)
+            else:
+                print(f"   本地暂不支持 {effect.name}，返回原片段")
+                return clip
+        
         print(f"📊 Parameters: {params}")
         
         if self.access_key_id:
@@ -607,14 +654,16 @@ class VolcanoEffects:
         duration = min(duration, clip1.duration, clip2.duration)
         
         # 创建淡出的clip1
-        clip1_fadeout = clip1.with_effects([
-            lambda clip: clip.with_opacity(lambda t: 1 - max(0, (t - clip.duration + duration) / duration))
-        ])
-        
-        # 创建淡入的clip2
-        clip2_fadein = clip2.with_effects([
-            lambda clip: clip.with_opacity(lambda t: min(1, t / duration))
-        ])
+        try:
+            # 尝试使用新版本MoviePy API
+            from moviepy.video.fx import FadeOut
+            from moviepy.video.fx import FadeIn
+            clip1_fadeout = clip1.with_effects([FadeOut(duration)])
+            clip2_fadein = clip2.with_effects([FadeIn(duration)])
+        except:
+            # 使用旧版本API或手动实现
+            clip1_fadeout = clip1.crossfadeout(duration)
+            clip2_fadein = clip2.crossfadein(duration)
         
         # 设置clip2的开始时间
         clip2_fadein = clip2_fadein.with_start(clip1.duration - duration)

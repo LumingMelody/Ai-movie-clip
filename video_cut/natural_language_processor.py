@@ -140,7 +140,7 @@ class VideoTimelineProcessor:
             "黑白": "#000000", "金色": "#FFD700"
         }
 
-    def generate_timeline_from_text(self, user_description: str) -> TimelineDict:
+    def generate_timeline_from_text(self, user_description: str, duration: Optional[float] = None) -> TimelineDict:
         """将自然语言描述转换为视频时间轴配置
         
         Args:
@@ -161,9 +161,29 @@ class VideoTimelineProcessor:
             self.logger.info(f"处理自然语言输入: {user_description[:50]}...")
             
             # 解析用户描述中的各种信息
-            video_duration = self._parse_duration(user_description)
-            time_segments = self._parse_time_segments(user_description)
+            video_duration = duration or self._parse_duration(user_description)
+            time_segments = self._parse_time_segments(user_description, total_duration=video_duration)
             global_effects = self._parse_global_effects(user_description)
+            
+            # 检查是否有转场效果
+            transition_effect = None
+            self.logger.info(f"🔍 检查全局特效中的转场: {global_effects}")
+            # 🔥 修复：检查所有转场类型，不只是包含"transition"的
+            transition_keywords = ["transition", "leaf_flip", "blinds", "wind_blow"]
+            for effect in global_effects:
+                if any(keyword in effect for keyword in transition_keywords):
+                    transition_effect = effect
+                    self.logger.info(f"🎬 识别到转场效果: {transition_effect}")
+                    # 从全局特效中移除转场效果，因为它要特殊处理
+                    global_effects = [e for e in global_effects if e != effect]
+                    break
+            
+            if not transition_effect:
+                self.logger.info("⚠️ 没有识别到转场效果")
+            
+            artistic_style = self._parse_artistic_style(user_description)  # 新增艺术风格解析
+            if artistic_style:
+                self.logger.info(f"🎨 识别到艺术风格: {artistic_style}")
             rhythm_config = self._parse_rhythm_style(user_description)
             color_theme = self._parse_color_theme(user_description)
         except Exception as e:
@@ -172,8 +192,10 @@ class VideoTimelineProcessor:
             video_duration = self.DEFAULT_VIDEO_DURATION
             time_segments = []
             global_effects = []
+            artistic_style = None
             rhythm_config = {}
             color_theme = None
+            transition_effect = None
         
         # 构建时间轴结构
         timeline_config = self._build_timeline_structure(
@@ -183,9 +205,16 @@ class VideoTimelineProcessor:
             color_theme=color_theme
         )
         
+        # 设置转场效果到metadata
+        if transition_effect:
+            timeline_config["metadata"]["transition_effect"] = transition_effect
+            self.logger.info(f"✅ 转场效果已设置到metadata: {transition_effect}")
+        else:
+            self.logger.info("ℹ️ 没有转场效果需要设置到metadata")
+        
         # 生成视频轨道
         timeline_config["timeline"]["tracks"] = self._generate_video_tracks(
-            time_segments, global_effects, video_duration, rhythm_config
+            time_segments, global_effects, video_duration, rhythm_config, artistic_style
         )
         
         return timeline_config
@@ -200,7 +229,8 @@ class VideoTimelineProcessor:
                 "description": description,
                 "tags": self._extract_content_tags(title + " " + description),
                 "generated_from": "natural_language_processing",
-                "generator_version": "1.0"
+                "generator_version": "1.0",
+                "transition_effect": None  # 将在后面设置
             },
             "timeline": {
                 "duration": duration,
@@ -233,31 +263,46 @@ class VideoTimelineProcessor:
         
         return self.DEFAULT_VIDEO_DURATION
 
-    def _parse_time_segments(self, text: str) -> List[VideoTimeSegment]:
+    def _parse_time_segments(self, text: str, total_duration: Optional[float] = None) -> List[VideoTimeSegment]:
         """解析时间段信息
         
         将文本分解为多个时间段，每个段落包含时间范围和内容描述
         """
         segments = []
         sentences = re.split(r'[。；\n]', text)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        # 如果只有一个句子，使用整个时长
+        if len(sentences) <= 1 and total_duration:
+            sentence = sentences[0] if sentences else text
+            segment_effects = self._identify_segment_effects(sentence)
+            segments.append(VideoTimeSegment(
+                start_time=0.0,
+                end_time=total_duration,
+                description=sentence,
+                effect_list=segment_effects
+            ))
+            return segments
+        
+        # 多个句子时，平均分配时长
+        segment_duration = (total_duration or self.DEFAULT_VIDEO_DURATION) / len(sentences) if sentences else self.DEFAULT_SEGMENT_DURATION
         
         current_time = 0.0
         for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-                
             # 解析时间范围
             time_range = self._parse_time_range(sentence)
             
             if time_range:
                 start_time, end_time = time_range
                 if end_time is None:
-                    end_time = start_time + self.DEFAULT_SEGMENT_DURATION
+                    end_time = start_time + segment_duration
             else:
                 # 自动分配时间段
                 start_time = current_time
-                end_time = current_time + self.DEFAULT_SEGMENT_DURATION
+                end_time = current_time + segment_duration
+                # 确保最后一段不超过总时长
+                if total_duration and end_time > total_duration:
+                    end_time = total_duration
             
             # 识别该段的特效
             segment_effects = self._identify_segment_effects(sentence)
@@ -295,11 +340,27 @@ class VideoTimelineProcessor:
         """
         detected_effects = []
         
-        for effect_type in VideoEffectType:
-            for keyword in effect_type.value:
-                if keyword in text:
-                    detected_effects.append(effect_type.name.lower())
-                    break
+        # 优先检查转场效果关键词，避免被其他效果误识别
+        transition_keywords = ["叶片翻转", "百叶窗", "风吹", "转场"]
+        has_transition = False
+        for keyword in transition_keywords:
+            if keyword in text:
+                # 🔥 重要：转场效果不应该加入到片段的effect_list
+                # 转场效果会在全局处理，不在单个片段中处理
+                has_transition = True
+                self.logger.info(f"检测到转场关键词 '{keyword}'，将在全局处理")
+                break
+        
+        # 如果有转场效果，不添加到片段效果列表
+        if not has_transition:
+            for effect_type in VideoEffectType:
+                # 跳过TRANSITION类型，因为已经单独处理
+                if effect_type == VideoEffectType.TRANSITION:
+                    continue
+                for keyword in effect_type.value:
+                    if keyword in text:
+                        detected_effects.append(effect_type.name.lower())
+                        break
         
         return detected_effects
 
@@ -310,17 +371,77 @@ class VideoTimelineProcessor:
         """
         global_effects = []
         
-        # 特效关键词映射
-        effect_keyword_map = {
-            "模糊": "blur", "发光": "glow", "粒子": "particle",
-            "故障": "glitch", "震动": "shake", "缩放": "zoom", "旋转": "rotate"
+        # 转场效果关键词映射 - 这些应该作为转场而不是滤镜
+        # 按优先级排序，长的关键词优先匹配
+        transition_keyword_map = {
+            "叶片翻转转场": "leaf_flip_transition",
+            "叶片翻转": "leaf_flip_transition",
+            "百叶窗转场": "blinds_transition",
+            "百叶窗": "blinds_transition",
+            "风吹转场": "wind_blow_transition",
+            "风吹": "wind_blow_transition",
+            "翻转转场": "leaf_flip_transition",  # 额外捕获"翻转转场"
         }
         
-        for keyword, effect_name in effect_keyword_map.items():
+        # 滤镜效果关键词映射
+        filter_keyword_map = {
+            # 火山引擎滤镜
+            "复古": "vintage", "清晰": "clear", "梦境": "dream",
+            "童年": "childhood", "美式": "american", "奶油": "cream",
+            "樱花": "sakura", "京都": "kyoto", "晚霞": "sunset",
+            # 基础效果
+            "故障": "glitch", "震动": "shake",
+            "模糊": "blur", "发光": "glow", "粒子": "particle",
+            "缩放": "zoom"
+            # 移除"旋转"关键词，避免与"翻转"冲突
+        }
+        
+        # 优先检查转场效果
+        found_transition = False
+        for keyword, effect_name in transition_keyword_map.items():
             if keyword in text:
                 global_effects.append(effect_name)
+                self.logger.info(f"🎬 检测到转场关键词: '{keyword}' -> {effect_name}")
+                found_transition = True
+                # 转场效果找到后，跳过对应的滤镜检查
+                break
+        
+        # 如果找到了转场效果，不再查找滤镜（避免"翻转"被识别为"旋转"）
+        if not found_transition:
+            # 检查滤镜效果
+            for keyword, effect_name in filter_keyword_map.items():
+                if keyword in text:
+                    global_effects.append(effect_name)
+            
+            # 特殊处理：只有明确说"旋转"且不包含"翻转"时才添加旋转滤镜
+            if "旋转" in text and "翻转" not in text:
+                global_effects.append("rotate")
         
         return global_effects
+    
+    def _parse_artistic_style(self, text: str) -> Optional[str]:
+        """解析艺术风格
+        
+        识别用户想要的8大艺术风格之一
+        """
+        # 艺术风格关键词映射
+        style_keywords = {
+            "复古赛博": ["复古赛博", "赛博朋克", "霓虹", "cyberpunk", "neon"],
+            "黑白默片": ["黑白默片", "默片", "老电影", "黑白", "怀旧"],
+            "梦幻仙境": ["梦幻仙境", "梦幻", "童话", "仙境", "梦境"],
+            "手绘动画": ["手绘动画", "手绘", "素描", "铅笔", "水彩"],
+            "极简扁平": ["极简扁平", "扁平", "极简", "简约", "flat"],
+            "胶片质感": ["胶片质感", "胶片", "电影感", "35mm", "film"],
+            "故障艺术": ["故障艺术", "故障", "glitch", "失真", "错位"],
+            "蒸汽波": ["蒸汽波", "vaporwave", "复古未来", "vhs", "retro"]
+        }
+        
+        for style_name, keywords in style_keywords.items():
+            for keyword in keywords:
+                if keyword.lower() in text.lower():
+                    return style_name
+        
+        return None
 
     def _parse_rhythm_style(self, text: str) -> RhythmConfig:
         """解析节奏风格
@@ -382,7 +503,7 @@ class VideoTimelineProcessor:
 
     def _generate_video_tracks(self, segments: List[VideoTimeSegment], 
                              global_effects: List[str], duration: float, 
-                             rhythm_config: RhythmConfig) -> List[Dict]:
+                             rhythm_config: RhythmConfig, artistic_style: Optional[str] = None) -> List[Dict]:
         """生成视频轨道
         
         根据解析的时间段和特效配置生成完整的视频轨道结构
@@ -398,14 +519,24 @@ class VideoTimelineProcessor:
         
         # 为每个时间段生成视频片段
         for segment_index, segment in enumerate(segments):
+            # 🔥 修复时长字段的生成逻辑
+            # clipIn和clipOut是源视频中的时间点，start和end是输出时间轴上的时间
             video_clip = {
                 "start": segment.start_time,
                 "end": segment.end_time,
-                "clipIn": segment.start_time,
-                "clipOut": segment.end_time,
+                "clipIn": segment.start_time,  # 从源视频的对应时间点开始
+                "clipOut": segment.end_time,   # 到源视频的对应时间点结束
                 "filters": self._convert_effects_to_filters(segment.effect_list + global_effects),
-                "transform": {"scale": 1.0, "position": [960, 540]}
+                "transform": {"scale": 1.0, "position": "center"}  # 🔥 使用center而不是像素坐标
             }
+            
+            # 添加艺术风格（如果用户指定了）
+            if artistic_style:
+                video_clip["artistic_style"] = artistic_style
+                self.logger.info(f"🎨 应用艺术风格到片段: {artistic_style}")
+            
+            # 🔥 确保所有时长字段一致
+            self.logger.info(f"生成视频片段: {segment.start_time}s-{segment.end_time}s (时长: {segment.end_time - segment.start_time}s)")
             
             # 添加转场效果
             if segment_index > 0 and "transition" in segment.effect_list:
@@ -484,6 +615,7 @@ class VideoTimelineProcessor:
         
         将语义化的特效名称转换为系统可识别的滤镜ID格式
         """
+        import random
         filter_identifiers = []
         
         # 特效到滤镜的映射表
@@ -494,11 +626,33 @@ class VideoTimelineProcessor:
             "glow": "glow_001",
             "zoom": "zoom_001",
             "rotate": "rotate_001",
-            "transition": "transition_001"
+            "transition_001": "transition_001"  # 兼容旧版本
         }
         
+        # 可用的转场效果列表
+        # 注意：rotate不是转场效果，是滤镜效果，所以移除
+        transition_effects = [
+            "zoom_in",
+            "zoom_out", 
+            "pan_left",
+            "pan_right",
+            # "rotate",  # 移除，这是滤镜不是转场
+            "shake",
+            "glitch"
+        ]
+        
         for effect_name in effect_names:
-            if effect_name in effect_to_filter_map:
+            # 🔥 重要：转场效果不应该作为滤镜添加！
+            # 转场效果应该在metadata中处理，不是作为clip的filter
+            if effect_name in ["leaf_flip_transition", "blinds_transition", "wind_blow_transition"]:
+                # 这些是转场效果，不添加到滤镜列表
+                self.logger.info(f"跳过转场效果（将在metadata中处理）: {effect_name}")
+                continue
+            elif effect_name == "transition" or effect_name == "transition_001":
+                # 如果是通用转场标记，也跳过（应该在metadata中处理）
+                self.logger.info(f"跳过通用转场标记: {effect_name}")
+                continue
+            elif effect_name in effect_to_filter_map:
                 filter_identifiers.append(effect_to_filter_map[effect_name])
         
         return filter_identifiers

@@ -47,7 +47,7 @@ class UnifiedNLProcessor:
         if cache_enabled:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
     
-    def process(self, user_input: str, mode: str = "auto") -> Dict[str, Any]:
+    def process(self, user_input: str, mode: str = "auto", duration: Optional[float] = None) -> Dict[str, Any]:
         """
         处理自然语言输入
         
@@ -71,10 +71,10 @@ class UnifiedNLProcessor:
         result = None
         
         if mode == "ai" or (mode == "auto" and self.use_ai and self.ai_processor):
-            result = self._process_with_ai(user_input)
+            result = self._process_with_ai(user_input, duration)
         
         if result is None and mode != "ai":
-            result = self._process_with_local(user_input)
+            result = self._process_with_local(user_input, duration)
         
         if result is None:
             raise Exception("无法处理输入，请检查配置")
@@ -85,7 +85,7 @@ class UnifiedNLProcessor:
         
         return result
     
-    def _process_with_ai(self, user_input: str) -> Optional[Dict[str, Any]]:
+    def _process_with_ai(self, user_input: str, duration: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """使用AI处理器处理"""
         try:
             self.logger.info("使用AI处理器处理自然语言...")
@@ -99,7 +99,7 @@ class UnifiedNLProcessor:
             # 使用本地处理器生成详细时间轴
             # 结合AI的理解和本地的结构化处理
             enhanced_input = self._enhance_input_with_ai_elements(user_input, elements, outline)
-            timeline = self.local_processor.generate_timeline_from_text(enhanced_input)
+            timeline = self.local_processor.generate_timeline_from_text(enhanced_input, duration)
             
             # 添加AI生成的元数据
             timeline["metadata"] = timeline.get("metadata", {})
@@ -113,12 +113,12 @@ class UnifiedNLProcessor:
             self.logger.error(f"AI处理失败: {e}")
             return None
     
-    def _process_with_local(self, user_input: str) -> Optional[Dict[str, Any]]:
+    def _process_with_local(self, user_input: str, duration: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """使用本地处理器处理"""
         try:
             self.logger.info("使用本地处理器处理自然语言...")
             
-            timeline = self.local_processor.generate_timeline_from_text(user_input)
+            timeline = self.local_processor.generate_timeline_from_text(user_input, duration)
             
             # 添加元数据
             timeline["metadata"] = timeline.get("metadata", {})

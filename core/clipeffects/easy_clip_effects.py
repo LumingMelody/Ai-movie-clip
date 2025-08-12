@@ -79,7 +79,7 @@ def zoom_in(clip: VideoClip, duration=2, intensity=0.3, easing=ease_in_out_quad)
         [animated_clip],
         size=clip.size,
         bg_color=(0, 0, 0)  # 可选黑底，也可以透明
-    ).with_duration(duration)
+    ).with_duration(clip.duration)  # 保持原始片段时长
 
     return final_clip
 
@@ -121,7 +121,7 @@ def zoom_out(clip: VideoClip, duration=2, intensity=0.3, easing=ease_in_out_quad
         [animated_clip],
         size=clip.size,
         bg_color=(0, 0, 0)  # 可选黑底，也可以透明背景
-    ).with_duration(duration)
+    ).with_duration(clip.duration)  # 保持原始片段时长
 
     return final_clip
 
@@ -175,7 +175,7 @@ def pan(clip: VideoClip, duration=2, intensity=100, direction='left', easing=eas
     animated_clip = (
         pre_zoomed_clip
         .with_position(position_func)  # 设置动态位置
-        .with_duration(duration)
+        .with_duration(clip.duration)  # 保持原始片段时长
     )
 
     # 固定输出分辨率为原视频大小
@@ -183,7 +183,7 @@ def pan(clip: VideoClip, duration=2, intensity=100, direction='left', easing=eas
         [animated_clip],
         size=original_size,
         bg_color=None  # 或者设置成 (0,0,0) 黑色背景
-    ).with_duration(duration)
+    ).with_duration(clip.duration)  # 保持原始片段时长
 
     return final_clip
 
@@ -255,7 +255,7 @@ def rotate(clip: VideoClip, duration=2, degrees=360, easing=ease_in_out_quad):
         pre_scaled_clip
         .rotated(lambda t: rotation_func(t))  # 使用自定义旋转函数
         .with_position(("center", "center"))   # 确保居中旋转
-        .with_duration(duration)
+        .with_duration(clip.duration)  # 保持原始片段时长
     )
 
     # 将旋转后的剪辑放入固定尺寸的合成剪辑中，防止画面变形
@@ -263,7 +263,7 @@ def rotate(clip: VideoClip, duration=2, degrees=360, easing=ease_in_out_quad):
         [animated_clip],
         size=original_size,
         bg_color=None  # 可选黑色背景或者透明背景
-    ).with_duration(duration)
+    ).with_duration(clip.duration)  # 保持原始片段时长
 
     return final_clip
 
@@ -589,7 +589,14 @@ def shake(clip: VideoClip, intensity=5) -> VideoClip:
         dy = random.randint(-intensity, intensity)
         return np.roll(frame, shift=(dy, dx), axis=(0, 1))
 
-    return VideoClip(make_frame, duration=clip.duration)
+    # 🔥 重要：保留原始音频
+    shake_clip = VideoClip(make_frame, duration=clip.duration)
+    
+    # 如果原始片段有音频，保留它
+    if hasattr(clip, 'audio') and clip.audio is not None:
+        shake_clip = shake_clip.with_audio(clip.audio)
+    
+    return shake_clip
 
 
 
@@ -615,7 +622,14 @@ def glitch(clip: VideoClip, intensity=3) -> VideoClip:
             new_frame[:, -offset:] = frame[:, :w + offset]
         return new_frame
 
-    return VideoClip(make_frame, duration=clip.duration)
+    # 🔥 重要：保留原始音频
+    glitch_clip = VideoClip(make_frame, duration=clip.duration)
+    
+    # 如果原始片段有音频，保留它
+    if hasattr(clip, 'audio') and clip.audio is not None:
+        glitch_clip = glitch_clip.with_audio(clip.audio)
+    
+    return glitch_clip
 
 
 def vignette(clip: VideoClip, strength=0.5) -> VideoClip:
@@ -640,7 +654,14 @@ def vignette(clip: VideoClip, strength=0.5) -> VideoClip:
         mask = 1 - strength * (1 - mask)
         return (frame * mask[..., np.newaxis]).astype(np.uint8)
 
-    return VideoClip(make_frame, duration=clip.duration)
+    # 🔥 重要：保留原始音频
+    vignette_clip = VideoClip(make_frame, duration=clip.duration)
+    
+    # 如果原始片段有音频，保留它
+    if hasattr(clip, 'audio') and clip.audio is not None:
+        vignette_clip = vignette_clip.with_audio(clip.audio)
+    
+    return vignette_clip
 
 # 创建带黑色半透明遮罩的复合视频
 def apply_black_overlay(clip, opacity=50):
@@ -697,6 +718,419 @@ def make_wavy_image_func(clip):
     return func
 
 # 使用示例
+# ==================== 转场效果实现 ====================
+# 实现火山引擎的所有转场效果，使用纯Python代码
+
+def leaf_flip_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """叶片翻转转场效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        if t < duration / 2:
+            # 前半段：clip1翻转消失
+            progress = t / (duration / 2)
+            angle = progress * 90
+            # 模拟3D翻转效果
+            scale_x = cos(radians(angle))
+            if scale_x > 0:
+                frame = clip1.get_frame(clip1.duration - duration + t)
+                h, w = frame.shape[:2]
+                # 水平压缩模拟翻转
+                new_w = int(w * scale_x)
+                if new_w > 0:
+                    resized = cv2.resize(frame, (new_w, h))
+                    # 居中显示
+                    result = np.zeros_like(frame)
+                    x_offset = (w - new_w) // 2
+                    result[:, x_offset:x_offset+new_w] = resized
+                    return result
+        else:
+            # 后半段：clip2翻转出现
+            progress = (t - duration / 2) / (duration / 2)
+            angle = 90 - progress * 90
+            scale_x = cos(radians(angle))
+            if scale_x > 0:
+                frame = clip2.get_frame(t - duration / 2)
+                h, w = frame.shape[:2]
+                new_w = int(w * scale_x)
+                if new_w > 0:
+                    resized = cv2.resize(frame, (new_w, h))
+                    result = np.zeros_like(frame)
+                    x_offset = (w - new_w) // 2
+                    result[:, x_offset:x_offset+new_w] = resized
+                    return result
+        
+        # 默认返回黑帧
+        return np.zeros_like(clip1.get_frame(0))
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def blinds_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0, num_blinds=10):
+    """百叶窗转场效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        frame1 = clip1.get_frame(clip1.duration - duration + t)
+        frame2 = clip2.get_frame(t)
+        
+        h, w = frame1.shape[:2]
+        blind_height = h // num_blinds
+        result = frame1.copy()
+        
+        for i in range(num_blinds):
+            y_start = i * blind_height
+            y_end = min((i + 1) * blind_height, h)
+            blind_progress = min(progress * num_blinds - i, 1.0)
+            
+            if blind_progress > 0:
+                cut_point = int(w * blind_progress)
+                result[y_start:y_end, :cut_point] = frame2[y_start:y_end, :cut_point]
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def wind_blow_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """风吹转场效果 - 模拟风吹散效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        frame1 = clip1.get_frame(clip1.duration - duration + t)
+        frame2 = clip2.get_frame(t)
+        
+        h, w = frame1.shape[:2]
+        result = frame2.copy()
+        
+        # 创建波浪形过渡
+        for y in range(h):
+            # 风吹的波浪偏移
+            wave_offset = sin(y * 0.02) * 50
+            transition_x = int(w * progress + wave_offset)
+            
+            if transition_x > 0:
+                result[y, :min(transition_x, w)] = frame1[y, :min(transition_x, w)]
+        
+        # 添加模糊边缘
+        if 0.2 < progress < 0.8:
+            blur_width = 20
+            for y in range(h):
+                wave_offset = sin(y * 0.02) * 50
+                transition_x = int(w * progress + wave_offset)
+                if blur_width < transition_x < w - blur_width:
+                    alpha = np.linspace(1, 0, blur_width)
+                    for i in range(blur_width):
+                        if transition_x - blur_width + i < w:
+                            result[y, transition_x - blur_width + i] = (
+                                frame1[y, transition_x - blur_width + i] * alpha[i] +
+                                frame2[y, transition_x - blur_width + i] * (1 - alpha[i])
+                            ).astype(np.uint8)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def rotate_zoom_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """旋转放大转场效果"""
+    # 单个clip时，使用旋转效果
+    if clip2 is None:
+        return rotate(clip1, duration=min(duration, clip1.duration), degrees=360)
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        
+        # 旋转角度和缩放
+        angle = progress * 360
+        scale = 1 + progress * 0.5
+        
+        if progress < 0.5:
+            frame = clip1.get_frame(clip1.duration - duration + t)
+            alpha = 1 - progress * 2
+        else:
+            frame = clip2.get_frame(t)
+            alpha = (progress - 0.5) * 2
+        
+        h, w = frame.shape[:2]
+        center = (w // 2, h // 2)
+        
+        # 创建旋转矩阵
+        M = cv2.getRotationMatrix2D(center, angle, scale)
+        rotated = cv2.warpAffine(frame, M, (w, h))
+        
+        # 淡入淡出
+        result = (rotated * alpha).astype(np.uint8)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def hexagon_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """六角形转场效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        frame1 = clip1.get_frame(clip1.duration - duration + t)
+        frame2 = clip2.get_frame(t)
+        
+        h, w = frame1.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        
+        # 创建六角形遮罩
+        max_radius = int(sqrt(w**2 + h**2) / 2)
+        current_radius = int(max_radius * progress)
+        
+        # 六角形顶点
+        angles = [i * 60 for i in range(6)]
+        points = []
+        for angle in angles:
+            x = center_x + current_radius * cos(radians(angle))
+            y = center_y + current_radius * sin(radians(angle))
+            points.append([int(x), int(y)])
+        
+        # 创建遮罩
+        mask = np.zeros((h, w), dtype=np.uint8)
+        if len(points) > 0 and current_radius > 0:
+            cv2.fillPoly(mask, [np.array(points)], 255)
+        
+        # 应用遮罩
+        mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        result = np.where(mask_3channel > 0, frame2, frame1)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def circle_open_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """圆形打开转场效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        frame1 = clip1.get_frame(clip1.duration - duration + t)
+        frame2 = clip2.get_frame(t)
+        
+        h, w = frame1.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        
+        # 计算圆形半径
+        max_radius = int(sqrt(w**2 + h**2) / 2)
+        current_radius = int(max_radius * progress)
+        
+        # 创建圆形遮罩
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.circle(mask, (center_x, center_y), current_radius, 255, -1)
+        
+        # 应用遮罩
+        mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        result = np.where(mask_3channel > 0, frame2, frame1)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def heart_open_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """心形打开转场效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        frame1 = clip1.get_frame(clip1.duration - duration + t)
+        frame2 = clip2.get_frame(t)
+        
+        h, w = frame1.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        
+        # 创建心形遮罩
+        mask = np.zeros((h, w), dtype=np.uint8)
+        scale = progress * 2
+        
+        # 心形参数方程
+        points = []
+        for theta in np.linspace(0, 2 * np.pi, 100):
+            x = 16 * (sin(theta) ** 3)
+            y = -(13 * cos(theta) - 5 * cos(2*theta) - 2 * cos(3*theta) - cos(4*theta))
+            x = int(center_x + x * scale * 5)
+            y = int(center_y + y * scale * 5)
+            if 0 <= x < w and 0 <= y < h:
+                points.append([x, y])
+        
+        if len(points) > 2:
+            cv2.fillPoly(mask, [np.array(points)], 255)
+        
+        # 应用遮罩
+        mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        result = np.where(mask_3channel > 0, frame2, frame1)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def dream_zoom_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """梦幻放大转场效果"""
+    # 单个clip时，使用zoom_in效果
+    if clip2 is None:
+        return zoom_in(clip1, duration=min(duration, clip1.duration), intensity=0.5)
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        
+        if progress < 0.5:
+            frame = clip1.get_frame(clip1.duration - duration + t)
+            scale = 1 + progress * 2
+            blur_strength = progress * 10
+        else:
+            frame = clip2.get_frame(t)
+            scale = 3 - progress * 2
+            blur_strength = (1 - progress) * 10
+        
+        h, w = frame.shape[:2]
+        
+        # 缩放
+        new_h, new_w = int(h * scale), int(w * scale)
+        scaled = cv2.resize(frame, (new_w, new_h))
+        
+        # 裁剪中心部分
+        y_start = (new_h - h) // 2
+        x_start = (new_w - w) // 2
+        result = scaled[y_start:y_start+h, x_start:x_start+w]
+        
+        # 添加模糊效果
+        if blur_strength > 0:
+            result = cv2.GaussianBlur(result, (int(blur_strength) * 2 + 1, int(blur_strength) * 2 + 1), 0)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def glitch_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """故障转换转场效果"""
+    # 单个clip时，使用glitch效果
+    if clip2 is None:
+        return glitch(clip1, intensity=3)
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        
+        if progress < 0.5:
+            frame = clip1.get_frame(clip1.duration - duration + t)
+        else:
+            frame = clip2.get_frame(t)
+        
+        h, w = frame.shape[:2]
+        result = frame.copy()
+        
+        # 在转场中间添加故障效果
+        if 0.3 < progress < 0.7:
+            # 随机RGB通道偏移
+            glitch_intensity = sin((progress - 0.3) * np.pi / 0.4) * 20
+            
+            # RGB通道分离和偏移
+            if len(frame.shape) == 3:
+                r, g, b = cv2.split(result)
+                
+                # 随机偏移
+                shift_r = int(random.uniform(-glitch_intensity, glitch_intensity))
+                shift_g = int(random.uniform(-glitch_intensity, glitch_intensity))
+                shift_b = int(random.uniform(-glitch_intensity, glitch_intensity))
+                
+                r = np.roll(r, shift_r, axis=1)
+                g = np.roll(g, shift_g, axis=1)
+                b = np.roll(b, shift_b, axis=1)
+                
+                result = cv2.merge([r, g, b])
+            
+            # 添加随机噪点
+            noise = np.random.randint(0, 50, (h, w, 3), dtype=np.uint8)
+            result = cv2.add(result, noise)
+            
+            # 随机横条
+            for _ in range(int(glitch_intensity)):
+                y = random.randint(0, h - 10)
+                result[y:y+random.randint(1, 5), :] = random.randint(0, 255)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+def clock_sweep_transition(clip1: VideoClip, clip2: VideoClip=None, duration=1.0):
+    """时钟扫描转场效果"""
+    # 单个clip时，返回原clip
+    if clip2 is None:
+        return clip1
+    
+    def make_frame(t):
+        progress = min(t / duration, 1.0)
+        frame1 = clip1.get_frame(clip1.duration - duration + t)
+        frame2 = clip2.get_frame(t)
+        
+        h, w = frame1.shape[:2]
+        center_x, center_y = w // 2, h // 2
+        
+        # 创建扇形遮罩
+        mask = np.zeros((h, w), dtype=np.uint8)
+        
+        # 计算扫描角度
+        sweep_angle = int(progress * 360)
+        
+        # 创建扇形
+        axes = (int(max(w, h)), int(max(w, h)))
+        cv2.ellipse(mask, (center_x, center_y), axes, -90, 0, sweep_angle, 255, -1)
+        
+        # 应用遮罩
+        mask_3channel = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+        result = np.where(mask_3channel > 0, frame2, frame1)
+        
+        return result
+    
+    return VideoClip(make_frame, duration=clip1.duration + clip2.duration - duration)
+
+# 转场效果映射字典
+TRANSITIONS = {
+    "leaf_flip": leaf_flip_transition,
+    "叶片翻转": leaf_flip_transition,
+    "blinds": blinds_transition,
+    "百叶窗": blinds_transition,
+    "wind_blow": wind_blow_transition,
+    "风吹": wind_blow_transition,
+    "rotate_zoom": rotate_zoom_transition,
+    "旋转放大": rotate_zoom_transition,
+    "hexagon": hexagon_transition,
+    "六角形": hexagon_transition,
+    "circle_open": circle_open_transition,
+    "圆形打开": circle_open_transition,
+    "heart_open": heart_open_transition,
+    "心形打开": heart_open_transition,
+    "dream_zoom": dream_zoom_transition,
+    "梦幻放大": dream_zoom_transition,
+    "glitch": glitch_transition,
+    "故障": glitch_transition,
+    "clock_sweep": clock_sweep_transition,
+    "时钟扫描": clock_sweep_transition,
+}
+
+def apply_transition(clip1: VideoClip, clip2: VideoClip, transition_name: str, duration=1.0):
+    """应用指定的转场效果"""
+    if transition_name in TRANSITIONS:
+        return TRANSITIONS[transition_name](clip1, clip2, duration)
+    else:
+        print(f"未知的转场效果: {transition_name}")
+        # 默认使用淡入淡出
+        return concatenate_videoclips([clip1, clip2], method="compose")
+
 if __name__ == '__main__':
 
 

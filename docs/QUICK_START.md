@@ -5,7 +5,7 @@
 ### 第一步：启动服务
 ```bash
 cd /Users/luming/PycharmProjects/Ai-movie-clip
-python app_0715.py
+python app.py
 ```
 
 ### 第二步：发送请求
