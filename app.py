@@ -268,7 +268,7 @@ def extract_warehouse_path(result):
         return None
 
     # 🔥 关键处理：转换为相对于warehouse的路径
-    user_data_dir = config.get_user_data_dir()
+    user_data_dir = config.get_user_data_dir()  # /project_root/ikun
 
     # 如果是绝对路径，转换为相对路径
     if os.path.isabs(video_path):
@@ -280,6 +280,14 @@ def extract_warehouse_path(result):
         except ValueError:
             print(f"⚠️ 无法转换路径: {video_path}")
             return None
+    else:
+        # 🔥 如果是相对路径但以 ikun/ 开头，去掉 ikun/ 前缀
+        if video_path.startswith('ikun/'):
+            video_path = video_path[5:]  # 去掉 "ikun/" 前缀
+            print(f"🔄 去除ikun前缀: {video_path}")
+        elif video_path.startswith('ikun\\'):
+            video_path = video_path[5:]  # 去掉 "ikun\\" 前缀
+            print(f"🔄 去除ikun前缀(Windows): {video_path}")
 
     # 标准化路径分隔符（统一使用正斜杠）
     warehouse_path = video_path.replace('\\', '/')
