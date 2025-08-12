@@ -144,19 +144,19 @@ def get_position_from_grid(grid_position: int) -> Tuple[str, float]:
         (horizontal, vertical) 位置元组
     """
     position_map = {
-        1: ("left", 0.1),    # 左上
-        2: ("center", 0.1),  # 中上
-        3: ("right", 0.1),   # 右上
-        4: ("left", 0.5),    # 左中
-        5: ("center", 0.5),  # 中心
-        6: ("right", 0.5),   # 右中
-        7: ("left", 0.9),    # 左下
-        8: ("center", 0.9),  # 中下
-        9: ("right", 0.9),   # 右下
+        1: ("left", "top"),       # 左上
+        2: ("center", "top"),     # 中上
+        3: ("right", "top"),      # 右上
+        4: ("left", "center"),    # 左中
+        5: ("center", "center"),  # 中心
+        6: ("right", "center"),   # 右中
+        7: ("left", "bottom"),    # 左下
+        8: ("center", "bottom"),  # 中下
+        9: ("right", "bottom"),   # 右下
     }
     
     # 默认位置：底部中间
-    return position_map.get(grid_position, ("center", 0.9))
+    return position_map.get(grid_position, ("center", "bottom"))
 
 
 def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]], 
@@ -241,10 +241,10 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
             # 🔥 使用九宫格位置设置
             position = get_position_from_grid(grid_position)
             txt_clip = txt_clip.with_start(start_time).with_end(end_time)
-            txt_clip = txt_clip.with_position(position, relative=True)  # 🔥 使用九宫格位置
+            txt_clip = txt_clip.with_position(position)  # 🔥 使用九宫格位置（不使用relative参数）
             
             subtitle_clips.append(txt_clip)
-            print(f"✅ 创建字幕片段{i+1}: '{segment[:20]}...' ({start_time:.1f}s-{end_time:.1f}s)")
+            print(f"✅ 创建字幕片段{i+1}: '{segment[:20]}...' ({start_time:.1f}s-{end_time:.1f}s) 位置:{position} 颜色:{color}")
             
         except Exception as e:
             print(f"⚠️ 创建字幕片段{i+1}失败: {e}")
@@ -261,7 +261,7 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
                     stroke_width=1,
                     size=(1000, None),
                     method='caption'
-                ).with_start(start_time).with_end(end_time).with_position(get_position_from_grid(grid_position), relative=True)
+                ).with_start(start_time).with_end(end_time).with_position(get_position_from_grid(grid_position))
                 subtitle_clips.append(txt_clip)
                 print(f"✅ 创建备用字幕片段{i+1}")
             except Exception as e2:
@@ -274,7 +274,7 @@ def create_subtitle_clips(segments: List[str], timings: List[Tuple[float, float]
                         text=segment,
                         font_size=font_size,
                         color=color
-                    ).with_start(start_time).with_end(end_time).with_position(get_position_from_grid(grid_position), relative=True)
+                    ).with_start(start_time).with_end(end_time).with_position(get_position_from_grid(grid_position))
                     subtitle_clips.append(txt_clip)
                     print(f"✅ 创建最简字幕片段{i+1}")
                 except Exception as e3:

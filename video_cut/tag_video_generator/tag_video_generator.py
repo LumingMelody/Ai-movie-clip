@@ -204,12 +204,16 @@ class TagVideoGenerator:
         
         video_with_subtitles = self._add_subtitles(base_video, text_content, subtitle_config)
         
-        # 5. 添加动态标签
-        if dynamic_tags:
-            final_video = self._add_dynamic_tags(video_with_subtitles, dynamic_tags, tag_config)
+        # 5. 添加动态标签（可选，通过subtitle_config控制）
+        show_dynamic_tags = subtitle_config.get('show_dynamic_tags', False)  # 默认不显示
+        if show_dynamic_tags:
+            if dynamic_tags:
+                final_video = self._add_dynamic_tags(video_with_subtitles, dynamic_tags, tag_config)
+            else:
+                # 如果没有指定动态标签，使用tag_config的键作为标签
+                final_video = self._add_dynamic_tags(video_with_subtitles, list(tag_config.keys()), tag_config)
         else:
-            # 如果没有指定动态标签，使用tag_config的键作为标签
-            final_video = self._add_dynamic_tags(video_with_subtitles, list(tag_config.keys()), tag_config)
+            final_video = video_with_subtitles
         
         # 6. 设置输出参数
         final_video = final_video.with_fps(fps)
@@ -502,7 +506,7 @@ class TagVideoGenerator:
         """
         self.logger.info("添加字幕...")
         
-        # 优先使用阿里云字幕API
+        # 如果启用阿里云字幕API，生成配置文件
         if self.use_aliyun_subtitle and self.aliyun_subtitle_api:
             aliyun_subtitle_json = self._create_aliyun_subtitles(video, text, config)
             if aliyun_subtitle_json:
@@ -513,13 +517,9 @@ class TagVideoGenerator:
                 with open(subtitle_file, 'w', encoding='utf-8') as f:
                     f.write(aliyun_subtitle_json)
                 self.logger.info(f"阿里云字幕配置已保存到: {subtitle_file}")
-                
-                # 注意：这里返回原视频，因为阿里云字幕是通过API处理的
-                # 在实际生产环境中，您需要调用阿里云的制作API来添加字幕
-                return video
         
-        # 备用方案：使用本地字幕
-        self.logger.info("使用本地字幕方案...")
+        # 同时使用本地MoviePy添加字幕到视频中
+        self.logger.info("使用本地MoviePy添加字幕...")
         
         # 分割文本为适合显示的片段
         segments = split_text_for_progressive_subtitles(text, max_chars_per_line=25, max_lines=2)
@@ -571,26 +571,79 @@ class TagVideoGenerator:
         # 计算每个标签的显示时间
         duration_per_tag = video.duration / len(tags) if tags else video.duration
         
+        # 获取项目根目录的中文字体文件
+        project_root = Path(__file__).parent.parent.parent
+        font_path = project_root / "江西拙楷2.0.ttf"
+        
+        # 备用字体路径
+        alt_font_path = project_root / "core/cliptemplate/coze/transform/江西拙楷2.0.ttf"
+        
+        # 选择字体
+        if font_path.exists():
+            font_to_use = str(font_path)
+            self.logger.info(f"动态标签使用字体: {font_path}")
+        elif alt_font_path.exists():
+            font_to_use = str(alt_font_path)
+            self.logger.info(f"动态标签使用备用字体: {alt_font_path}")
+        else:
+            # macOS 系统中文字体
+            system_fonts = [
+                '/System/Library/Fonts/Supplemental/Arial Unicode.ttf',
+                '/System/Library/Fonts/STHeiti Light.ttc',
+                '/System/Library/Fonts/PingFang.ttc'
+            ]
+            font_to_use = None
+            for sys_font in system_fonts:
+                if Path(sys_font).exists():
+                    font_to_use = sys_font
+                    self.logger.info(f"动态标签使用系统字体: {sys_font}")
+                    break
+            
+            if not font_to_use:
+                font_to_use = 'Helvetica'
+                self.logger.warning("未找到中文字体，动态标签可能显示异常")
+        
         tag_clips = []
         for i, tag in enumerate(tags):
             # 创建标签文本
             tag_text = f"#{tag}"
-            tag_clip = TextClip(
-                text=tag_text,
-                font='Arial',
-                font_size=36,
-                color='yellow',
-                stroke_color='black',
-                stroke_width=1
-            )
             
-            # 设置标签位置（右上角）和显示时间
-            tag_clip = tag_clip.with_position(('right', 50))
-            tag_clip = tag_clip.with_start(i * duration_per_tag)
-            tag_clip = tag_clip.with_duration(duration_per_tag)
-            
-            tag_clips.append(tag_clip)
-            self.logger.info(f"  添加标签: {tag_text} [{i * duration_per_tag:.1f}s - {(i + 1) * duration_per_tag:.1f}s]")
+            try:
+                tag_clip = TextClip(
+                    text=tag_text,
+                    font=font_to_use,
+                    font_size=36,
+                    color='yellow',
+                    stroke_color='black',
+                    stroke_width=1
+                )
+                
+                # 设置标签位置（右上角）和显示时间
+                tag_clip = tag_clip.with_position(('right', 50))
+                tag_clip = tag_clip.with_start(i * duration_per_tag)
+                tag_clip = tag_clip.with_duration(duration_per_tag)
+                
+                tag_clips.append(tag_clip)
+                self.logger.info(f"  添加标签: {tag_text} [{i * duration_per_tag:.1f}s - {(i + 1) * duration_per_tag:.1f}s]")
+                
+            except Exception as e:
+                self.logger.error(f"创建动态标签失败 '{tag_text}': {e}")
+                # 尝试不使用描边的简单文本
+                try:
+                    tag_clip = TextClip(
+                        text=tag_text,
+                        font=font_to_use,
+                        font_size=36,
+                        color='yellow'
+                    )
+                    tag_clip = tag_clip.with_position(('right', 50))
+                    tag_clip = tag_clip.with_start(i * duration_per_tag)
+                    tag_clip = tag_clip.with_duration(duration_per_tag)
+                    tag_clips.append(tag_clip)
+                    self.logger.info(f"  添加简化标签: {tag_text}")
+                except:
+                    self.logger.error(f"无法添加动态标签: {tag_text}")
+                    continue
         
         # 合成所有元素
         return CompositeVideoClip([video] + tag_clips)
