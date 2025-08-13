@@ -1,11 +1,15 @@
 import dashscope
 from dashscope import Generation
 import os
+import sys
+from pathlib import Path
 
-from get_api_key import get_api_key_from_file
+# 添加项目路径
+sys.path.append(str(Path(__file__).parent.parent.parent))
+from core.utils.env_config import get_dashscope_api_key
 
 # 初始化 DashScope API Key
-dashscope.api_key = get_api_key_from_file()
+dashscope.api_key = get_dashscope_api_key() or os.getenv('DASHSCOPE_API_KEY')
 
 def call_qwen(prompt):
 

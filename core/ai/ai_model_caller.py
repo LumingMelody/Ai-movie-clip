@@ -12,6 +12,7 @@ import os
 from typing import Dict, Any, Optional, List
 
 from core.utils.config_manager import config, ErrorHandler
+from core.utils.env_config import get_dashscope_api_key
 
 
 class AIModelCaller:
@@ -28,7 +29,8 @@ class AIModelCaller:
         # 加载配置
         self.ai_config = config.get_config('ai')
         
-        self.api_key = api_key or config.get_api_key()
+        # 优先使用传入的api_key，其次从环境变量获取
+        self.api_key = api_key or get_dashscope_api_key()
         self.model = model or self.ai_config['default_model']
         self.base_url = self.ai_config['base_url']
         self.max_retries = self.ai_config['max_retries']

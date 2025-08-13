@@ -90,30 +90,26 @@ class ConfigManager:
         self.api_key = self._load_api_key()
     
     def _load_api_key(self) -> Optional[str]:
-        """从多个来源加载API密钥"""
-        # 1. 环境变量
+        """从环境变量加载API密钥"""
+        # 只从环境变量加载
         api_key = os.getenv('DASHSCOPE_API_KEY')
-        if api_key:
-            return api_key
+        if not api_key:
+            # 尝试加载.env文件
+            try:
+                from dotenv import load_dotenv
+                from pathlib import Path
+                env_file = Path(self.project_root) / '.env'
+                if env_file.exists():
+                    load_dotenv(env_file)
+                    api_key = os.getenv('DASHSCOPE_API_KEY')
+            except ImportError:
+                pass
         
-        # 2. 当前目录的api_key.txt
-        api_key_files = [
-            os.path.join(self.project_root, "api_key.txt"),
-            os.path.join(self.core_dir, "api_key.txt"),
-            "api_key.txt"
-        ]
+        if not api_key:
+            print("警告: 未找到DASHSCOPE_API_KEY环境变量")
+            print("请在.env文件中配置: DASHSCOPE_API_KEY=your_api_key")
         
-        for api_key_file in api_key_files:
-            if os.path.exists(api_key_file):
-                try:
-                    with open(api_key_file, 'r', encoding='utf-8') as f:
-                        api_key = f.read().strip()
-                        if api_key:
-                            return api_key
-                except Exception as e:
-                    print(f"读取{api_key_file}失败: {e}")
-        
-        return None
+        return api_key
     
     def _setup_logging(self):
         """设置日志配置"""

@@ -14,7 +14,7 @@ import oss2
 
 import config
 from core.orchestrator.workflow_orchestrator import VideoEditingOrchestrator
-from main import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 UPLOAD_DIR = os.path.join(config.get_user_data_dir(), "uploads")
 if not os.path.exists(UPLOAD_DIR):
@@ -682,7 +682,7 @@ def get_video_edit_simple(video_sources, duration=30, style="抖音风", purpose
 
             # 6. 获取API密钥
 
-            final_api_key = api_key or get_api_key_from_file()
+            final_api_key = api_key or get_dashscope_api_key()
 
             # 7. 创建工作流程编排器
             orchestrator = VideoEditingOrchestrator(
