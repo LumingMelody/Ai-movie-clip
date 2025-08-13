@@ -287,9 +287,9 @@ def get_video_dgh_img_insert(title: str, video_file_path: str,
         print(f"🤖 开始AI改写内容...")
         try:
             # 直接调用qwen-max API进行改写
-            from get_api_key import get_api_key_from_file
+            from core.utils.env_config import get_dashscope_api_key
             
-            api_key = get_api_key_from_file()
+            api_key = get_dashscope_api_key()
             
             # 构建改写提示
             rewrite_prompt = f"""

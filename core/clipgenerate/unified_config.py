@@ -8,7 +8,7 @@ import os
 import json
 from typing import Dict, Any, Optional, List
 from pathlib import Path
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 class APIConfig:
@@ -54,7 +54,7 @@ API配置管理类
             
             # 其次使用文件
             try:
-                return get_api_key_from_file()
+                return get_dashscope_api_key()
             except:
                 pass
             

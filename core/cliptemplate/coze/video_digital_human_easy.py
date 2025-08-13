@@ -16,7 +16,7 @@ import tempfile
 import re
 
 
-def get_api_key_from_file():
+def get_dashscope_api_key():
     """获取API密钥"""
     # 您可以从配置文件或环境变量中获取，这里先硬编码您的密钥
     return "sk-a48a1d84e015410292d07021f60b9acb"
@@ -26,7 +26,7 @@ def synthesize_speech_with_bailian(text, output_path):
     """使用阿里百炼CosyVoice SDK合成语音"""
     try:
         # 设置API Key
-        api_key = get_api_key_from_file()
+        api_key = get_dashscope_api_key()
         dashscope.api_key = api_key
         os.environ['DASHSCOPE_API_KEY'] = api_key
 

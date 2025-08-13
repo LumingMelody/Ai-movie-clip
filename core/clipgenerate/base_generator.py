@@ -15,14 +15,14 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 
 import requests
 import dashscope
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 class APIClientBase(ABC):
     """API客户端基础类"""
     
     def __init__(self, api_key: str = None, timeout: int = 30):
-        self.api_key = api_key or get_api_key_from_file()
+        self.api_key = api_key or get_dashscope_api_key()
         self.timeout = timeout
         self.session = requests.Session()
         self._setup_session()
@@ -183,7 +183,7 @@ class BaseGenerator(ABC):
     """生成器基础类"""
     
     def __init__(self, api_key: str = None, **kwargs):
-        self.api_key = api_key or get_api_key_from_file()
+        self.api_key = api_key or get_dashscope_api_key()
         self.tongyi_client = TongyiClient(self.api_key)
         self.wanxiang_client = WanXiangClient(self.api_key)
         self.coze_client = CozeClient()

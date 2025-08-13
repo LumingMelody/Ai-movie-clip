@@ -14,7 +14,7 @@ import numpy as np
 from config import get_user_data_dir
 from core.cliptemplate.coze.video_digital_human_easy import get_video_digital_huamn_easy_local
 from download_material import download_materials_from_api  # 🔥 统一使用这个下载函数
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 def calculate_text_durations(video_duration, text_list):
@@ -228,7 +228,7 @@ def synthesize_speech_with_bailian(text, output_path, reference_audio_path=None,
         import dashscope
 
         # 获取API Key
-        api_key = get_api_key_from_file()
+        api_key = get_dashscope_api_key()
         dashscope.api_key = api_key
         os.environ['DASHSCOPE_API_KEY'] = api_key
 

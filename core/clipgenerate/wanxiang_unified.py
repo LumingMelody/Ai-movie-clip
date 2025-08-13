@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from .base_generator import APIClientBase, handle_api_errors
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 class WanXiangUnifiedClient(APIClientBase):

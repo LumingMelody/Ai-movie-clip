@@ -4,7 +4,7 @@ import dashscope
 import os
 from moviepy import VideoFileClip
 
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 target_model = "cosyvoice-v2"
 
@@ -12,7 +12,7 @@ def get_voice_copy_disposable(aduio_url,content,project_path):
    
     # voiceEnrollmentService=VoiceEnrollmentService()
     # voice_id=voiceEnrollmentService.create_voice("cosyvoice-v2","temp",aduio_url)
-    dashscope.api_key = get_api_key_from_file()  # 如果您没有配置环境变量，请在此处用您的API-KEY进行替换
+    dashscope.api_key = get_dashscope_api_key()  # 如果您没有配置环境变量，请在此处用您的API-KEY进行替换
 
     url = aduio_url  # 请按实际情况进行替换
     prefix = 'prefix'
@@ -55,7 +55,7 @@ def generate_voice_copy(voice_id,content,project_path):
 
 
 def create_voice_copy(aduio_url):
-    dashscope.api_key = get_api_key_from_file()
+    dashscope.api_key = get_dashscope_api_key()
     url = aduio_url  # 请按实际情况进行替换
     prefix = 'prefix'
     
@@ -69,7 +69,7 @@ def create_voice_copy(aduio_url):
 
 
 def delete_voice_copy(voice_id):
-    dashscope.api_key = get_api_key_from_file()  # 如果您没有配置环境变量，请在此处用您的API-KEY进行替换
+    dashscope.api_key = get_dashscope_api_key()  # 如果您没有配置环境变量，请在此处用您的API-KEY进行替换
     service = VoiceEnrollmentService()
     service.delete_voice(voice_id)
     print("requestId: ", service.get_last_request_id())

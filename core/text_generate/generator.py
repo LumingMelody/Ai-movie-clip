@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, List
 from jinja2 import Environment, FileSystemLoader, Template
 
 from core.text_generate.prompt_manager import validate_scene_and_type, build_prompt
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 
@@ -28,7 +28,7 @@ class CopyGenerator:
             model: 使用的模型名称，默认qwen-max
             template_dir: 模板根目录
         """
-        self.api_key = get_api_key_from_file()
+        self.api_key = get_dashscope_api_key()
         self.base_url = base_url or "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
         self.model = model
         self.template_dir = template_dir

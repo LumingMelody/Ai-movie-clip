@@ -2,7 +2,7 @@ import os
 import requests
 from pathlib import Path
 from datetime import datetime, timedelta
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 def get_upload_policy(api_key, model_name):
@@ -90,7 +90,7 @@ def get_online_url(file_path):
     # api_key = os.getenv("DASHSCOPE_API_KEY")
 
     # 替换为你的 API 密钥
-    api_key = get_api_key_from_file()
+    api_key = get_dashscope_api_key()
     if not api_key:
         raise Exception("请设置DASHSCOPE_API_KEY环境变量")
 

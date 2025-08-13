@@ -12,14 +12,14 @@ from concurrent.futures import ThreadPoolExecutor
 
 import requests
 from typing import Dict, List, Optional, Any, Union
-from get_api_key import get_api_key_from_file
+from core.utils.env_config import get_dashscope_api_key
 
 
 class WanXiangAPIHandler:
     """通义万相API处理器"""
 
     def __init__(self, api_key: str = None):
-        self.api_key = get_api_key_from_file()
+        self.api_key = api_key or get_dashscope_api_key()
         self.base_url = "https://dashscope.aliyuncs.com/api/v1"
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
