@@ -2329,6 +2329,13 @@ async def wanxiang_virtual_model_v1(request: VirtualModelV1Request):
     # 定义实际处理逻辑
     async def process():
         try:
+            # 🔥 Debug: 打印请求参数
+            print(f"🔍 [DEBUG] virtual_model_v1 请求参数:")
+            print(f"   base_image_url: {getattr(request, 'base_image_url', 'MISSING')}")
+            print(f"   prompt: {getattr(request, 'prompt', 'MISSING')}")
+            print(f"   request type: {type(request)}")
+            print(f"   request dict: {request.__dict__ if hasattr(request, '__dict__') else 'NO_DICT'}")
+            
             result = service.video_api.virtual_model_v1(
                 base_image_url=request.base_image_url,
                 prompt=request.prompt,
