@@ -2262,7 +2262,20 @@ async def wanxiang_text_to_image_v2(request: TextToImageV2Request):
             error_res = {"error": str(e), "function_name": "text_to_image_v2"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "text_to_image_v2", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "text_to_image_v2", 
+        mode=mode,
+        prompt=request.prompt,
+        model=getattr(request, 'model', 'wanx2.1-t2i-turbo'),
+        negative_prompt=getattr(request, 'negative_prompt', None),
+        size=getattr(request, 'size', '1024*1024'),
+        n=getattr(request, 'n', 1),
+        seed=getattr(request, 'seed', None),
+        prompt_extend=getattr(request, 'prompt_extend', True),
+        watermark=getattr(request, 'watermark', False)
+    )
 
 
 @app.post("/wanxiang/text-to-image-v1")
@@ -2290,7 +2303,21 @@ async def wanxiang_text_to_image_v1(request: TextToImageV1Request):
             error_res = {"error": str(e), "function_name": "text_to_image_v1"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "text_to_image_v1", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "text_to_image_v1", 
+        mode=mode,
+        prompt=request.prompt,
+        style=getattr(request, 'style', '<auto>'),
+        negative_prompt=getattr(request, 'negative_prompt', None),
+        size=getattr(request, 'size', '1024*1024'),
+        n=getattr(request, 'n', 1),
+        seed=getattr(request, 'seed', None),
+        ref_img=getattr(request, 'ref_img', None),
+        ref_strength=getattr(request, 'ref_strength', 0.5),
+        ref_mode=getattr(request, 'ref_mode', 'repaint')
+    )
 
 
 # ========== Tongyi Wanxiang 图像编辑接口 ==========
@@ -2316,7 +2343,17 @@ async def wanxiang_image_background_edit(request: ImageBackgroundEditRequest):
             error_res = {"error": str(e), "function_name": "image_background_edit"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "image_background_edit", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "image_background_edit", 
+        mode=mode,
+        image_url=request.image_url,
+        prompt=request.background_prompt,
+        negative_prompt=getattr(request, 'negative_prompt', None),
+        guidance_scale=getattr(request, 'guidance_scale', 7.5),
+        strength=getattr(request, 'strength', 0.8)
+    )
 
 
 # ========== Tongyi Wanxiang 虚拟模特接口 ==========
@@ -2329,13 +2366,6 @@ async def wanxiang_virtual_model_v1(request: VirtualModelV1Request):
     # 定义实际处理逻辑
     async def process():
         try:
-            # 🔥 Debug: 打印请求参数
-            print(f"🔍 [DEBUG] virtual_model_v1 请求参数:")
-            print(f"   base_image_url: {getattr(request, 'base_image_url', 'MISSING')}")
-            print(f"   prompt: {getattr(request, 'prompt', 'MISSING')}")
-            print(f"   request type: {type(request)}")
-            print(f"   request dict: {request.__dict__ if hasattr(request, '__dict__') else 'NO_DICT'}")
-            
             result = service.video_api.virtual_model_v1(
                 base_image_url=request.base_image_url,
                 prompt=request.prompt,
@@ -2351,7 +2381,19 @@ async def wanxiang_virtual_model_v1(request: VirtualModelV1Request):
             error_res = {"error": str(e), "function_name": "virtual_model_v1"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "virtual_model_v1", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "virtual_model_v1", 
+        mode=mode,
+        base_image_url=request.base_image_url,
+        prompt=request.prompt,
+        mask_image_url=getattr(request, 'mask_image_url', None),
+        face_prompt=getattr(request, 'face_prompt', None),
+        background_image_url=getattr(request, 'background_image_url', None),
+        short_side_size=getattr(request, 'short_side_size', '1024'),
+        n=getattr(request, 'n', 1)
+    )
 
 
 @app.post("/wanxiang/virtual-model-v2")
@@ -2429,7 +2471,24 @@ async def wanxiang_creative_poster(request: CreativePosterRequest):
             error_res = {"error": str(e), "function_name": "creative_poster"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "creative_poster", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "creative_poster", 
+        mode=mode,
+        title=request.title,
+        sub_title=getattr(request, 'sub_title', None),
+        body_text=getattr(request, 'body_text', None),
+        prompt_text_zh=getattr(request, 'prompt_text_zh', None),
+        wh_ratios=getattr(request, 'wh_ratios', '竖版'),
+        lora_name=getattr(request, 'lora_name', None),
+        lora_weight=getattr(request, 'lora_weight', 0.8),
+        ctrl_ratio=getattr(request, 'ctrl_ratio', 0.7),
+        ctrl_step=getattr(request, 'ctrl_step', 0.7),
+        generate_mode=getattr(request, 'generate_mode', 'generate'),
+        generate_num=getattr(request, 'generate_num', 1),
+        auxiliary_parameters=getattr(request, 'auxiliary_parameters', None)
+    )
 
 
 @app.post("/wanxiang/background-generation")
@@ -2476,7 +2535,17 @@ async def wanxiang_ai_tryon_basic(request: AITryonBasicRequest):
             error_res = {"error": str(e), "function_name": "ai_tryon_basic"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "ai_tryon_basic", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "ai_tryon_basic", 
+        mode=mode,
+        person_image_url=request.person_image_url,
+        top_garment_url=getattr(request, 'top_garment_url', None),
+        bottom_garment_url=getattr(request, 'bottom_garment_url', None),
+        resolution=getattr(request, 'resolution', -1),
+        restore_face=getattr(request, 'restore_face', True)
+    )
 
 
 @app.post("/wanxiang/ai-tryon-plus")
@@ -2596,7 +2665,15 @@ async def wanxiang_animate_anyone(request: AnimateAnyoneRequest):
             error_res = {"error": str(e), "function_name": "animate_anyone"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "animate_anyone", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "animate_anyone", 
+        mode=mode,
+        image_url=request.image_url,
+        dance_video_url=request.dance_video_url,
+        duration=getattr(request, 'duration', 10)
+    )
 
 
 @app.post("/wanxiang/emo-video")
@@ -2619,7 +2696,16 @@ async def wanxiang_emo_video(request: EMOVideoRequest):
             error_res = {"error": str(e), "function_name": "emo_video"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "emo_video", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "emo_video", 
+        mode=mode,
+        image_url=request.image_url,
+        audio_url=request.audio_url,
+        ratio=getattr(request, 'ratio', '1:1'),
+        style_level=getattr(request, 'style_level', 'normal')
+    )
 
 
 @app.post("/wanxiang/live-portrait")
@@ -2641,7 +2727,15 @@ async def wanxiang_live_portrait(request: LivePortraitRequest):
             error_res = {"error": str(e), "function_name": "live_portrait"}
             return format_response(error_res, mode="sync", error_type="general_exception")
 
-    return await handle_async_endpoint(request, process, "live_portrait", mode=mode)
+    return await handle_async_endpoint(
+        request, 
+        process, 
+        "live_portrait", 
+        mode=mode,
+        image_url=request.image_url,
+        audio_url=request.audio_url,
+        duration=getattr(request, 'duration', 10)
+    )
 
 
 # ========== Tongyi Wanxiang 视频风格重绘接口 ==========
