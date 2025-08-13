@@ -3431,11 +3431,10 @@ async def get_auto_intro_status():
 @app.post("/text/industry")
 async def api_get_text_industry(
         req: TextIndustryRequest,
-        mode: str = Query("sync", description="执行模式：sync(同步)/async(异步)"),
         tenant_id_query: str = Query(None, description="租户ID（URL参数）", alias="tenant_id"),
         task_id_query: str = Query(None, description="任务ID（URL参数）", alias="task_id")
 ):
-    """行业文案生成 - 支持任务状态更新"""
+    """行业文案生成 - 使用qwen-max直接生成"""
     try:
         tenant_id = req.tenant_id or tenant_id_query
         task_id = req.task_id or task_id_query or str(uuid.uuid4())
@@ -3450,40 +3449,52 @@ async def api_get_text_industry(
         if tenant_id:
             api_service.update_task_status(task_id, "0", tenant_id, business_id=business_id)
 
-        function_args = {
-            "industry": req.industry,
-            "product": req.product,
-            "feature": req.feature,
-            "scene": req.scene,
-        }
-
-        if mode == "sync":
-            # 同步模式
-            from core.cliptemplate.coze.text_industry import get_text_industry
-            result = get_text_industry(**function_args)
-
-            # 🔥 如果有tenant_id，更新任务状态为完成
-            if tenant_id:
+        # 使用qwen-max直接生成
+        from core.text_generate.industry_text_generator import generate_industry_text
+        
+        result = generate_industry_text(
+            industry=req.industry,
+            is_hot=req.is_hot,
+            content=req.content,
+            category_id=req.categoryId
+        )
+        
+        # 🔥 根据结果更新任务状态
+        if tenant_id:
+            if result['success']:
                 api_service.update_task_status(task_id, "1", tenant_id, business_id=business_id)
+            else:
+                api_service.update_task_status(task_id, "2", tenant_id, business_id=business_id)
 
-            response = format_response(result, mode, urlpath)
-            if isinstance(response, dict):
-                response.update({
-                    "task_id": task_id,
-                    "tenant_id": tenant_id,
-                    "business_id": business_id
-                })
-            return response
+        # 格式化响应 - 使用统一的format_response
+        if result['success']:
+            # 构建用于format_response的结果
+            formatted_result = {
+                "content_type": "text",
+                "text_content": result['content'],
+                "result": {
+                    "industry": result['industry'],
+                    "content": result['content'],
+                    "source": result.get('source', 'ai_generated'),
+                    "model": result.get('model', 'qwen-max')
+                },
+                "upload_skipped": True,
+                "skip_reason": "文本类接口无需上传",
+                "function_name": "industry_text_generation",
+                "processing_time": 0,
+                "task_id": task_id,
+                "tenant_id": tenant_id,
+                "business_id": business_id,
+                "task_update_success": True
+            }
+            
+            # 添加警告信息（如果有）
+            if 'warning' in result:
+                formatted_result['warning'] = result['warning']
+            
+            return format_response(formatted_result, mode="sync", urlpath="")
         else:
-            # 异步模式
-            task_id = await task_manager.submit_task(
-                func_name="get_text_industry",
-                args=function_args,
-                tenant_id=tenant_id,
-                business_id=business_id
-            )
-
-            return format_response(task_id, mode="async", urlpath=urlpath)
+            raise Exception(result.get('error', '未知错误'))
 
     except Exception as e:
         # 🔥 异常时更新任务状态为失败
@@ -3493,7 +3504,16 @@ async def api_get_text_industry(
             except Exception as status_error:
                 print(f"⚠️ 更新失败状态时出错: {status_error}")
 
-        raise HTTPException(status_code=500, detail=f"行业文案生成失败: {str(e)}")
+        
+        # 使用统一的错误格式
+        error_result = {
+            "error": f"行业文案生成失败: {str(e)}",
+            "message": "文案生成处理失败",
+            "task_id": locals().get('task_id'),
+            "tenant_id": locals().get('tenant_id'),
+            "business_id": locals().get('business_id')
+        }
+        return format_response(error_result, error_type="general_exception")
 
 
 @app.post("/copy/generate")

@@ -168,6 +168,7 @@ class TextIndustryRequest(BaseModel):
     categoryId: Optional[str] = Field(None, description="分类ID")  # 🔥 新增
     tenant_id: Optional[str] = Field(None, description="租户ID")  # 🔥 新增
     id: Optional[str] = Field(None, description="业务ID")  # 🔥 新增
+    task_id: Optional[str] = Field(None, description="任务ID")  # 🔥 新增
 
 
 class VideoRandomRequest(BaseModel):
