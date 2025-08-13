@@ -14,6 +14,7 @@ from moviepy import VideoFileClip, concatenate_videoclips
 
 from core.ai.ai_model_caller import AIModelCaller
 from core.utils.config_manager import config, ErrorHandler, PathHelper
+from core.utils.video_utils import VideoProcessor
 
 # 设置Python路径
 config.setup_python_path()
@@ -33,6 +34,9 @@ class VideoEditingOrchestrator:
         self.start_time = None
         self.video_config = config.get_config('video')
         self.output_config = config.get_config('output')
+        
+        # 初始化视频处理器
+        self.video_processor = VideoProcessor()
 
         # 导入转场和特效模块
         self._import_effects_modules()
@@ -297,7 +301,7 @@ class VideoEditingOrchestrator:
         print(f"    📥 安全加载视频: {os.path.basename(video_path)}")
         
         # 使用统一的视频处理器加载视频
-        clip, has_audio = video_processor.safe_load_video(video_path)
+        clip, has_audio = self.video_processor.safe_load_video(video_path)
         if clip is None:
             raise ValueError(f"无法加载视频: {video_path}")
         
