@@ -2248,8 +2248,13 @@ async def wanxiang_text_to_image_v2(request: TextToImageV2Request):
         try:
             result = service.video_api.text_to_image_v2(
                 prompt=request.prompt,
-                style=getattr(request, 'style', 'default'),
-                size=getattr(request, 'size', '1024*1024')
+                model=getattr(request, 'model', 'wanx2.1-t2i-turbo'),
+                negative_prompt=getattr(request, 'negative_prompt', None),
+                size=getattr(request, 'size', '1024*1024'),
+                n=getattr(request, 'n', 1),
+                seed=getattr(request, 'seed', None),
+                prompt_extend=getattr(request, 'prompt_extend', True),
+                watermark=getattr(request, 'watermark', False)
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "text_to_image_v2", request, is_digital_human=False)
@@ -2270,7 +2275,14 @@ async def wanxiang_text_to_image_v1(request: TextToImageV1Request):
         try:
             result = service.video_api.text_to_image_v1(
                 prompt=request.prompt,
-                style=getattr(request, 'style', 'default')
+                style=getattr(request, 'style', '<auto>'),
+                negative_prompt=getattr(request, 'negative_prompt', None),
+                size=getattr(request, 'size', '1024*1024'),
+                n=getattr(request, 'n', 1),
+                seed=getattr(request, 'seed', None),
+                ref_img=getattr(request, 'ref_img', None),
+                ref_strength=getattr(request, 'ref_strength', 0.5),
+                ref_mode=getattr(request, 'ref_mode', 'repaint')
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "text_to_image_v1", request, is_digital_human=False)
@@ -2293,7 +2305,10 @@ async def wanxiang_image_background_edit(request: ImageBackgroundEditRequest):
         try:
             result = service.video_api.image_background_edit(
                 image_url=request.image_url,
-                background_prompt=request.background_prompt
+                prompt=request.background_prompt,
+                negative_prompt=getattr(request, 'negative_prompt', None),
+                guidance_scale=getattr(request, 'guidance_scale', 7.5),
+                strength=getattr(request, 'strength', 0.8)
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "image_background_edit", request, is_digital_human=False)
@@ -2391,7 +2406,15 @@ async def wanxiang_creative_poster(request: CreativePosterRequest):
                 title=request.title,
                 sub_title=getattr(request, 'sub_title', None),
                 body_text=getattr(request, 'body_text', None),
-                prompt_text_zh=getattr(request, 'prompt_text_zh', None)
+                prompt_text_zh=getattr(request, 'prompt_text_zh', None),
+                wh_ratios=getattr(request, 'wh_ratios', '竖版'),
+                lora_name=getattr(request, 'lora_name', None),
+                lora_weight=getattr(request, 'lora_weight', 0.8),
+                ctrl_ratio=getattr(request, 'ctrl_ratio', 0.7),
+                ctrl_step=getattr(request, 'ctrl_step', 0.7),
+                generate_mode=getattr(request, 'generate_mode', 'generate'),
+                generate_num=getattr(request, 'generate_num', 1),
+                auxiliary_parameters=getattr(request, 'auxiliary_parameters', None)
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "creative_poster", request, is_digital_human=False)
@@ -2557,7 +2580,8 @@ async def wanxiang_animate_anyone(request: AnimateAnyoneRequest):
         try:
             result = service.video_api.animate_anyone(
                 image_url=request.image_url,
-                dance_video_url=request.dance_video_url
+                dance_video_url=request.dance_video_url,
+                duration=getattr(request, 'duration', 10)
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "animate_anyone", request, is_digital_human=False)
@@ -2578,7 +2602,9 @@ async def wanxiang_emo_video(request: EMOVideoRequest):
         try:
             result = service.video_api.emo_video(
                 image_url=request.image_url,
-                audio_url=request.audio_url
+                audio_url=request.audio_url,
+                ratio=getattr(request, 'ratio', '1:1'),
+                style_level=getattr(request, 'style_level', 'normal')
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "emo_video", request, is_digital_human=False)
@@ -2599,7 +2625,8 @@ async def wanxiang_live_portrait(request: LivePortraitRequest):
         try:
             result = service.video_api.live_portrait(
                 image_url=request.image_url,
-                audio_url=request.audio_url
+                audio_url=request.audio_url,
+                duration=getattr(request, 'duration', 10)
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "live_portrait", request, is_digital_human=False)
@@ -2622,7 +2649,8 @@ async def wanxiang_video_style_transfer(request: VideoStyleTransferRequest):
         try:
             result = service.video_api.video_style_transfer(
                 video_url=request.video_url,
-                style=request.style
+                style=request.style,
+                video_fps=getattr(request, 'video_fps', 15)
             )
             # 🔥 使用增强函数处理结果
             return enhance_endpoint_result(result, "video_style_transfer", request, is_digital_human=False)
