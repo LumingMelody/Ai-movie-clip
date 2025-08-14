@@ -35,7 +35,20 @@ class WanXiangAPIHandler:
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
-            raise Exception(f"API请求失败: {str(e)}")
+            # 尝试获取详细的错误信息
+            error_msg = f"API请求失败: {str(e)}"
+            try:
+                if hasattr(e, 'response') and e.response is not None:
+                    error_detail = e.response.json()
+                    if 'message' in error_detail:
+                        error_msg += f" - 详细错误: {error_detail['message']}"
+                    elif 'error' in error_detail:
+                        error_msg += f" - 详细错误: {error_detail['error']}"
+                    else:
+                        error_msg += f" - 响应内容: {error_detail}"
+            except:
+                pass
+            raise Exception(error_msg)
 
     def _wait_for_task(self, task_id: str, max_wait_time: int = 300) -> Dict:
         """等待异步任务完成"""
@@ -615,7 +628,7 @@ def get_virtual_model_v1(base_image_url: str, prompt: str,
         input_data["background_image_url"] = background_image_url
 
     task_data = {
-        "model": "wanx-virtualmodel-v1",
+        "model": "wanx-virtualmodel",
         "input": input_data,
         "parameters": {
             "short_side_size": short_side_size,
@@ -692,7 +705,7 @@ def get_virtual_model_v2(base_image_url: str, prompt: str,
         input_data["background_image_url"] = background_image_url
 
     task_data = {
-        "model": "wanx-virtualmodel-v2",
+        "model": "virtualmodel-v2",
         "input": input_data,
         "parameters": {
             "short_side_size": short_side_size,
@@ -1341,13 +1354,20 @@ def get_animate_anyone_template(dance_video_url: str) -> str:
     """
     print(f"🎬 [舞动人像] 创建动作模板:")
     print(f"   舞蹈视频: {dance_video_url}")
+    
+    # 🔥 调试：检查参数
+    if not dance_video_url:
+        raise ValueError("dance_video_url 不能为空或None")
+    if not isinstance(dance_video_url, str):
+        raise ValueError(f"dance_video_url 必须是字符串，当前类型: {type(dance_video_url)}")
+    print(f"✅ 参数验证通过，dance_video_url: {dance_video_url}")
 
     handler = WanXiangAPIHandler()
 
     task_data = {
         "model": "animate-anyone-template-gen2",
         "input": {
-            "dance_video_url": dance_video_url
+            "video_url": dance_video_url
         }
     }
 
@@ -1400,13 +1420,12 @@ def get_animate_anyone_template(dance_video_url: str) -> str:
         raise
 
 
-def get_animate_anyone_generation(detection_id: str, template_id: str,
+def get_animate_anyone_generation(image_url: str, template_id: str,
                                   duration: int = 10) -> str:
     """
     舞动人像 - 视频生成
     """
     print(f"💃 [舞动人像] 生成视频:")
-    print(f"   检测ID: {detection_id}")
     print(f"   动作模板ID: {template_id}")
     print(f"   时长: {duration}秒")
 
@@ -1415,7 +1434,7 @@ def get_animate_anyone_generation(detection_id: str, template_id: str,
     task_data = {
         "model": "animate-anyone-gen2",
         "input": {
-            "detection_id": detection_id,
+            "image_url": image_url,
             "template_id": template_id
         },
         "parameters": {
@@ -1429,7 +1448,7 @@ def get_animate_anyone_generation(detection_id: str, template_id: str,
     create_headers = handler.headers.copy()
     create_headers["X-DashScope-Async"] = "enable"
 
-    url = f"{handler.base_url}/services/aigc/image2video/aa-generation"
+    url = f"{handler.base_url}/services/aigc/image2video/video-synthesis"
     print(f"📤 视频生成URL: {url}")
 
     try:
@@ -1657,8 +1676,11 @@ def get_animate_anyone(image_url: str, dance_video_url: str, duration: int = 10)
 
             detection_id = detection_future.result()
             template_id = template_future.result()
+            print(f"✅ 检测ID: {detection_id}")
+            print(f"✅ 模板ID: {template_id}")
 
-        video_url = get_animate_anyone_generation(detection_id, template_id, duration)
+        # 🔥 修复：视频生成使用原始image_url而不是detection_id
+        video_url = get_animate_anyone_generation(image_url, template_id, duration)
         print(f"🎉 舞动人像流程完成: {video_url}")
         return video_url
 

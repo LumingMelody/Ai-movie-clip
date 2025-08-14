@@ -1095,15 +1095,173 @@ class AsyncTaskManager:
                                     business_id=business_id
                                 )
                         else:
-                            print(f"⚠️ [OSS-UPLOAD] 本地文件不存在: {local_full_path}")
-                            # 文件不存在，直接更新状态
-                            self.api_service.update_task_status(
-                                task_id=task_id,
-                                status="1",
-                                tenant_id=tenant_id,
-                                path=warehouse_path,
-                                business_id=business_id
+                            # 获取任务函数名，判断是否为需要处理临时OSS链接的万相接口
+                            function_name = result.get("function_name", "")
+                            wanxiang_endpoints_need_download = [
+                                "virtual_model_v1", "virtual_model_v2", "text_to_image_v1", "text_to_image_v2",
+                                "image_edit", "creative_poster", "background_generation", 
+                                "ai_tryon_basic", "ai_tryon_plus", "ai_tryon_enhance", "ai_tryon_segment",
+                                "animate_anyone", "emo_video", "live_portrait", "image_to_video_advanced"
+                            ]
+                            
+                            # 检查warehouse_path是否为万相接口返回的临时OSS链接
+                            is_wanxiang_temp_link = (
+                                warehouse_path and 
+                                (warehouse_path.startswith('http://') or warehouse_path.startswith('https://')) and
+                                function_name in wanxiang_endpoints_need_download and
+                                ('dashscope-result' in warehouse_path or 'aliyuncs.com' in warehouse_path)
                             )
+                            
+                            if is_wanxiang_temp_link:
+                                print(f"🔗 [DOWNLOAD] 检测到万相接口({function_name})的临时OSS链接，开始下载: {warehouse_path}")
+                                try:
+                                    # 导入下载功能
+                                    from core.utils.file_utils import download_file_with_retry
+                                    from urllib.parse import urlparse
+                                    import uuid
+                                    
+                                    # 确保user_data_dir目录存在（已经是ikun目录）
+                                    os.makedirs(user_data_dir, exist_ok=True)
+                                    
+                                    # 生成本地文件名
+                                    parsed_url = urlparse(warehouse_path)
+                                    file_ext = os.path.splitext(parsed_url.path)[1] or '.png'  # 海报默认.png
+                                    local_filename = f"{uuid.uuid4().hex[:8]}_downloaded{file_ext}"
+                                    local_download_path = os.path.join(user_data_dir, local_filename)
+                                    
+                                    # 使用直接下载，避免代理问题
+                                    print(f"📥 [DOWNLOAD] 下载到本地: {local_download_path}")
+                                    download_success = False
+                                    
+                                    try:
+                                        import requests
+                                        # 禁用代理，直接连接
+                                        session = requests.Session()
+                                        session.trust_env = False  # 不使用环境变量中的代理设置
+                                        proxies = {'http': None, 'https': None}
+                                        
+                                        response = session.get(
+                                            warehouse_path, 
+                                            stream=True, 
+                                            timeout=20,
+                                            proxies=proxies,
+                                            verify=False  # 暂时禁用SSL验证
+                                        )
+                                        response.raise_for_status()
+                                        
+                                        with open(local_download_path, 'wb') as f:
+                                            for chunk in response.iter_content(chunk_size=8192):
+                                                if chunk:
+                                                    f.write(chunk)
+                                        
+                                        download_success = True
+                                        print(f"✅ [DOWNLOAD] 直连下载成功: {local_download_path}")
+                                        
+                                    except Exception as download_error:
+                                        print(f"❌ [DOWNLOAD] 直连下载失败: {download_error}")
+                                        # 降级到原下载函数
+                                        try:
+                                            download_success = download_file_with_retry(
+                                                url=warehouse_path,
+                                                save_path=local_download_path,
+                                                max_retries=1,
+                                                timeout=15,
+                                                verbose=True
+                                            )
+                                        except Exception as fallback_error:
+                                            print(f"❌ [DOWNLOAD] 降级下载也失败: {fallback_error}")
+                                            download_success = False
+                                    
+                                    if download_success and os.path.exists(local_download_path):
+                                        print(f"✅ [DOWNLOAD] 下载成功: {local_download_path}")
+                                        
+                                        # 更新路径为相对路径（user_data_dir已经是ikun目录）
+                                        new_warehouse_path = local_filename
+                                        
+                                        # 上传到OSS
+                                        oss_path = f"agent/resource/{new_warehouse_path}"
+                                        upload_success = upload_to_oss(local_download_path, oss_path)
+                                        
+                                        if upload_success:
+                                            final_oss_url = f'https://lan8-e-business.oss-cn-hangzhou.aliyuncs.com/{oss_path}'
+                                            print(f"🌐 [OSS-URL] 最终访问链接: {final_oss_url}")
+                                            
+                                            # 调用create_resource保存资源
+                                            try:
+                                                file_info = get_file_info(local_download_path)
+                                                if file_info:
+                                                    resource_result = self.api_service.create_resource(
+                                                        resource_type=file_info['resource_type'],
+                                                        name=file_info['name'],
+                                                        path=oss_path,
+                                                        local_full_path=local_download_path,
+                                                        file_type=file_info['file_type'],
+                                                        size=file_info['size'],
+                                                        tenant_id=tenant_id
+                                                    )
+                                                    
+                                                    resource_id = None
+                                                    if resource_result:
+                                                        resource_id = resource_result.get('resource_id', 95)
+                                                        print(f"📚 [RESOURCE] 资源创建成功，ID: {resource_id}")
+                                                    else:
+                                                        resource_id = 95
+                                                        print(f"⚠️ [RESOURCE] 资源创建失败，使用默认ID: {resource_id}")
+                                                else:
+                                                    resource_id = 95
+                                                    print(f"⚠️ [RESOURCE] 无法获取文件信息，使用默认ID: {resource_id}")
+                                            except Exception as e:
+                                                resource_id = 95
+                                                print(f"❌ [RESOURCE] 资源创建异常: {str(e)}，使用默认ID: {resource_id}")
+                                            
+                                            # 更新任务状态
+                                            self.api_service.update_task_status(
+                                                task_id=task_id,
+                                                status="1",
+                                                tenant_id=tenant_id,
+                                                path=oss_path,
+                                                resource_id=resource_id,
+                                                business_id=business_id
+                                            )
+                                            print(f"✅ [OSS-UPLOAD] 状态更新成功")
+                                        else:
+                                            print(f"❌ [OSS-UPLOAD] 文件上传失败，使用原URL")
+                                            self.api_service.update_task_status(
+                                                task_id=task_id,
+                                                status="1",
+                                                tenant_id=tenant_id,
+                                                path=warehouse_path,
+                                                business_id=business_id
+                                            )
+                                    else:
+                                        print(f"❌ [DOWNLOAD] 下载失败，使用原URL")
+                                        self.api_service.update_task_status(
+                                            task_id=task_id,
+                                            status="1",
+                                            tenant_id=tenant_id,
+                                            path=warehouse_path,
+                                            business_id=business_id
+                                        )
+                                        
+                                except Exception as download_error:
+                                    print(f"❌ [DOWNLOAD] 下载异常: {str(download_error)}，使用原URL")
+                                    self.api_service.update_task_status(
+                                        task_id=task_id,
+                                        status="1",
+                                        tenant_id=tenant_id,
+                                        path=warehouse_path,
+                                        business_id=business_id
+                                    )
+                            else:
+                                print(f"⚠️ [OSS-UPLOAD] 本地文件不存在: {local_full_path}")
+                                # 文件不存在，直接更新状态
+                                self.api_service.update_task_status(
+                                    task_id=task_id,
+                                    status="1",
+                                    tenant_id=tenant_id,
+                                    path=warehouse_path,
+                                    business_id=business_id
+                                )
                     else:
                         print(f"⚠️ [OSS-UPLOAD] 未找到有效路径，跳过状态更新")
                 except Exception as e:

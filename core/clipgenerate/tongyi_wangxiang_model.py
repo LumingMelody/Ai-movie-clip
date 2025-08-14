@@ -194,7 +194,7 @@ class ImageToVideoAdvancedRequest(BaseModel):
 # ============ 虚拟模特相关请求模型 ============
 class VirtualModelV1Request(BaseModel):
     """虚拟模特V1版请求模型 - 扁平化结构"""
-    model: str = Field("wanx-virtualmodel-v1", description="模型名称")
+    model: str = Field("wanx-virtualmodel", description="模型名称")
     base_image_url: str = Field(..., description="模特或人台实拍商品展示图URL")
     prompt: str = Field(..., description="虚拟模特和背景描述")
     mask_image_url: Optional[str] = Field(None, description="遮罩图片URL")
@@ -211,7 +211,7 @@ class VirtualModelV1Request(BaseModel):
     class Config:
         schema_extra = {
             "example": {
-                "model": "wanx-virtualmodel-v1",
+                "model": "wanx-virtualmodel",
                 "base_image_url": "https://example.com/model_photo.jpg",
                 "prompt": "一名年轻女子，身穿白色短裤，极简风格调色板，长镜头",
                 "face_prompt": "年轻女子，面容姣好，最高品质",
@@ -225,7 +225,7 @@ class VirtualModelV1Request(BaseModel):
 
 class VirtualModelV2Request(BaseModel):
     """虚拟模特V2版请求模型 - 扁平化结构"""
-    model: str = Field("wanx-virtualmodel-v2", description="模型名称")
+    model: str = Field("virtualmodel-v2", description="模型名称")
     base_image_url: str = Field(..., description="模特或人台实拍商品展示图URL")
     prompt: str = Field(..., description="虚拟模特和背景描述（建议使用英文）")
     mask_image_url: Optional[str] = Field(None, description="遮罩图片URL")
@@ -242,7 +242,7 @@ class VirtualModelV2Request(BaseModel):
     class Config:
         schema_extra = {
             "example": {
-                "model": "wanx-virtualmodel-v2",
+                "model": "virtualmodel-v2",
                 "base_image_url": "https://example.com/model_photo.jpg",
                 "prompt": "A woman stands on a rural road",
                 "face_prompt": "good face, beautiful face, best quality.",
