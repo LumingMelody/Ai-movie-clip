@@ -66,6 +66,65 @@ OSS_BUCKET_NAME=your_bucket_name_here
 - **OpenAI API Key**: 访问 [OpenAI平台](https://platform.openai.com/api-keys)
 - **OSS配置**: 访问 [阿里云OSS控制台](https://oss.console.aliyun.com/)
 
+## Coze 集成功能
+
+本系统集成了 Coze 数字人和图片插入功能，为视频制作提供更丰富的素材和效果。
+
+### 🎭 数字人功能
+- 基于 Coze API 的数字人视频生成
+- 支持多种数字人模型和动作
+- 文本驱动的数字人表演生成
+
+### 🖼️ 图片插入功能  
+- 智能图片素材插入
+- 自动场景匹配和位置优化
+- 支持多种图片格式和效果
+
+### ⚙️ 配置要求
+
+使用 Coze 相关功能需要：
+
+1. **搭建 Coze Workflow**
+   - 在 [Coze 平台](https://www.coze.com/) 创建并配置相应的工作流
+   - 获取 Workflow API 密钥并配置到系统中
+
+2. **下载素材包**
+   - 素材下载链接：[https://pan.quark.cn/s/5a16054e18eb](https://pan.quark.cn/s/5a16054e18eb)
+   - 将素材包解压到项目的 `resources/` 目录下
+   - 确保素材路径配置正确
+
+3. **环境配置**
+   ```env
+   # 添加到 .env 文件
+   COZE_API_KEY=your_coze_api_key_here
+   COZE_WORKFLOW_ID=your_workflow_id_here
+   ```
+
+### 📋 使用示例
+
+```python
+# 使用数字人功能
+from core.cliptemplate.coze.video_digital_human_easy import VideoDigitalHumanEasy
+
+# 生成数字人视频
+digital_human = VideoDigitalHumanEasy()
+result = digital_human.generate_video(
+    text="你好，欢迎使用AI视频剪辑系统",
+    avatar_id="your_avatar_id"
+)
+
+# 使用图片插入功能
+from core.cliptemplate.coze.video_dgh_img_insert import VideoDghImgInsert
+
+# 插入图片到视频
+img_inserter = VideoDghImgInsert()
+result = img_inserter.insert_image(
+    video_path="path/to/video.mp4",
+    image_path="path/to/image.jpg",
+    position="center"
+)
+```
+
 ## 使用方法
 
 ### 命令行工具
