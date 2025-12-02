@@ -5,10 +5,14 @@ This example describes how to use the workflow interface to chat.
 
 # Our official coze sdk for Python [cozepy](https://github.com/coze-dev/coze-py)
 from cozepy import COZE_CN_BASE_URL
-from config import load_config
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Get an access_token through personal access token or oauth.
-coze_api_token = load_config()['coze']
+coze_api_token = os.getenv('COZE_API_KEY', '')
 # The default access is api.coze.com, but if you need to access api.coze.cn,
 # please use base_url to configure the api endpoint to access
 coze_api_base = COZE_CN_BASE_URL

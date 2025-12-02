@@ -12,6 +12,7 @@ from typing import Dict, Any, Optional, List
 from jinja2 import Environment, FileSystemLoader, Template
 
 from core.text_generate.prompt_manager import validate_scene_and_type, build_prompt
+from core.text_generate.template_parser import AdditionalRequirementsProcessor
 from core.utils.env_config import get_dashscope_api_key
 
 
@@ -43,6 +44,9 @@ class CopyGenerator:
 
         # 初始化模板环境
         self._init_template_environment()
+
+        # 初始化额外需求处理器
+        self.requirements_processor = AdditionalRequirementsProcessor(template_dir)
 
     def _init_template_environment(self):
         """初始化Jinja2模板环境"""
@@ -185,9 +189,23 @@ class CopyGenerator:
     def _render_template(self, category: str, style: str, params: Dict[str, Any]) -> str:
         """渲染模板"""
         try:
+            # 🔥 处理输入数据，分离模板参数和额外需求
+            processed_data = self.requirements_processor.process_input_data(category, style, params)
+
+            # 准备渲染参数：包含模板参数和额外需求
+            render_params = processed_data['template_params'].copy()
+            render_params['additional_requirements'] = processed_data['additional_requirements']
+
+            # 如果有额外需求，打印日志
+            if processed_data['extra_params']:
+                print(f"🎯 [TEMPLATE-RENDER] 检测到额外参数:")
+                for key, value in processed_data['extra_params'].items():
+                    print(f"   - {key}: {value}")
+
+            # 渲染模板
             template_path = f"{category}/{style}.j2"
             template = self.jinja_env.get_template(template_path)
-            rendered_content = template.render(**params)
+            rendered_content = template.render(**render_params)
             return rendered_content.strip()
         except Exception as e:
             raise Exception(f"模板渲染失败: {e}")

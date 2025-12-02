@@ -11,6 +11,10 @@
 - [自然语言编辑](docs/NL_VIDEO_EDIT.md) - 自然语言视频编辑功能
 - [MCP服务](docs/MCP_SERVICE.md) - Model Context Protocol服务说明
 
+## 🔗 相关项目
+
+- [Aura Render](https://github.com/LumingMelody/aura_render) - 相关渲染项目
+
 ## 功能特性
 
 - 🎬 **视频自动分析**：使用CV和ML模型分析视频内容

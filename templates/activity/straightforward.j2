@@ -1,3 +1,8 @@
 {{ 店名称 }}邀您参加{{ 活动主题 }}！
 地点：{{ 店位置 }}，时间：即日起
 精彩内容：{{ 活动内容 }}，限时{{ 视频时长 }}等你来体验！
+
+{% if additional_requirements %}
+
+{{ additional_requirements }}
+{% endif %}
